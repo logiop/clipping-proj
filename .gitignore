@@ -16,7 +16,7 @@
 .DS_Store
 __pycache__/
 # per-run working folders and logs
-test*/
+/test[0-9]*/
 run*.log
 # third-party code not redistributed here (see README)
 gta6-clipper/

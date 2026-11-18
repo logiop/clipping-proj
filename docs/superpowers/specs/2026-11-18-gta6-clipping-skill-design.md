@@ -1,6 +1,6 @@
 # GTA 6 clipping skill: design
 
-Date: 2026-11-18. Status: draft, awaiting approval. Reviewed and extended on Opus (changes marked in "Review notes" at the end).
+Date: 2026-11-18. Status: approved by the owner on 2026-11-18. Reviewed and extended on Opus (changes marked in "Review notes" at the end).
 
 ## Intent and why
 
@@ -72,6 +72,7 @@ These are targets to measure against, not hard guarantees. (My call; correct if 
 - Content base: clips of big streamers (IShowSpeed, Kai Cenat, ...), plus comparison clips.
 - The owner posts; Claude never posts.
 - Build with Opus for the parts that need judgment.
+- Comparison clips are back to back (A full screen, then B full screen), not split screen: a big facecam matters more on a phone than seeing both at once.
 
 ## Design
 
@@ -138,7 +139,6 @@ Exact CLI flags, JSON schemas, Whisper model sizes per machine speed, caption st
 
 ## Open items (owner)
 
-- Comparison layout: split screen (both at once) or back to back (A, then B). See conversation.
 - Confirm streamers allow clipping before posting; fill `campaigns.json` with the programs actually joined.
 - Verify ElevenLabs plan limits and commercial licence before Phase 5.
 - Decide later on a scheduler for six accounts.

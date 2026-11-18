@@ -1,0 +1,14 @@
+# Watchlist for gta6-clipper (copy to ~/gta6-clips/streamers.txt)
+# platform:name  -> twitch:<login> or youtube:@handle
+# Only clip streamers who allow it. Check their clipping program first.
+twitch:kaicenat
+youtube:@IShowSpeed
+twitch:xqc
+twitch:timthetatman
+twitch:summit1g
+twitch:lirik
+twitch:hasanabi
+twitch:zackrawrr
+twitch:caseoh_
+twitch:jynxzi
+twitch:ludwig

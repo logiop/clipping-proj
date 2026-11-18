@@ -1,0 +1,23 @@
+# media & heavy artifacts
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.m4a
+*.jpg
+*.jpeg
+*.png
+*.gif
+# local envs, caches, secrets
+.venv/
+.env
+.DS_Store
+__pycache__/
+# per-run working folders and logs
+test*/
+run*.log
+# third-party code not redistributed here (see README)
+gta6-clipper/
+skills-review/

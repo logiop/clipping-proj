@@ -1,6 +1,9 @@
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from clipping import claude
 
@@ -45,6 +48,45 @@ def test_ask_strips_dollar_schema_and_adds_dir(tmp_path):
     assert "$schema" not in sent and sent["required"] == ["n"]
     assert argv[argv.index("--add-dir") + 1] == str(tmp_path)
     assert argv[argv.index("--tools") + 1] == "Read"
+
+
+def test_ask_is_sealed_from_user_mcp_and_permissions():
+    calls = []
+    claude.ask("hi", SCHEMA, "m", runner=fake(envelope(structured_output={"n": 1}), calls=calls))
+    argv, _ = calls[0]
+    assert "--strict-mcp-config" in argv
+    assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+    assert "--allowedTools" not in argv
+
+
+def test_ask_without_tools_runs_in_a_fresh_empty_dir():
+    calls, seen = [], {}
+
+    def runner(argv, **kw):
+        seen["cwd"] = kw["cwd"]
+        seen["listing"] = list(Path(kw["cwd"]).iterdir())
+        return fake(envelope(structured_output={"n": 1}), calls=calls)(argv, **kw)
+
+    claude.ask("hi", SCHEMA, "m", runner=runner)
+    assert seen["listing"] == []
+    assert Path(seen["cwd"]).resolve() != Path.cwd().resolve()
+    assert not Path(seen["cwd"]).exists()  # removed after the call
+
+
+def test_ask_with_read_is_scoped_to_the_add_dir(tmp_path):
+    calls = []
+    claude.ask("hi", SCHEMA, "m", tools="Read", add_dir=tmp_path,
+               runner=fake(envelope(structured_output={"n": 1}), calls=calls))
+    argv, kw = calls[0]
+    assert argv[argv.index("--allowedTools") + 1] == f"Read(/{tmp_path.resolve()}/**)"
+    assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+    assert "--strict-mcp-config" in argv
+    assert kw["cwd"] == str(tmp_path.resolve())
+
+
+def test_ask_refuses_tools_without_a_dir():
+    with pytest.raises(ValueError):
+        claude.ask("hi", SCHEMA, "m", tools="Read", runner=fake(envelope(structured_output={"n": 1})))
 
 
 def test_ask_returns_structured_output():

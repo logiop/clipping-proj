@@ -2,8 +2,9 @@
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import jsonschema
 
@@ -27,16 +28,43 @@ def _extract(envelope: dict):
     return None
 
 
+def build_argv(sendable: dict, model: str, tools: str, read_dir: Optional[Path]) -> List[str]:
+    """The sealed `claude -p` command line.
+
+    --strict-mcp-config drops every MCP server of the user's config; dontAsk denies anything
+    not explicitly allowed. Tools (Read only, for the visual check) are allowed only inside
+    `read_dir` (`//abs/**` is the absolute-path rule syntax): a bare `Read` allow rule was
+    verified to approve reads anywhere on disk.
+    """
+    argv = ["claude", "-p", "--tools", tools, "--strict-mcp-config", "--permission-mode", "dontAsk"]
+    if read_dir is not None:
+        argv += ["--add-dir", str(read_dir)]
+        argv += ["--allowedTools", ",".join(f"{t.strip()}(/{read_dir}/**)" for t in tools.split(","))]
+    return argv + ["--output-format", "json", "--json-schema", json.dumps(sendable),
+                   "--model", model, "--no-session-persistence"]
+
+
+def _run(argv: List[str], prompt: str, read_dir: Optional[Path], runner):
+    """Run in `read_dir`, or in a fresh empty temp dir so the user's cwd is never inherited."""
+    if read_dir is not None:
+        return runner(argv, input=prompt, capture_output=True, text=True, timeout=TIMEOUT_S, cwd=str(read_dir))
+    with tempfile.TemporaryDirectory(prefix="gta6clip-claude-") as empty:
+        return runner(argv, input=prompt, capture_output=True, text=True, timeout=TIMEOUT_S, cwd=empty)
+
+
 def ask(prompt: str, schema: dict, model: str, tools: str = "",
         add_dir: Optional[Path] = None, runner=subprocess.run) -> Optional[dict]:
-    """Run one `claude -p` call; None on any failure or if the reply does not validate."""
+    """Run one `claude -p` call; None on any failure or if the reply does not validate.
+
+    ValueError when tools are requested without `add_dir` (no tool may run unscoped).
+    """
+    if tools and add_dir is None:
+        raise ValueError("tools need add_dir: they are only allowed inside that directory")
     sendable = {k: v for k, v in schema.items() if k != "$schema"}
-    argv = ["claude", "-p", "--tools", tools, "--output-format", "json",
-            "--json-schema", json.dumps(sendable), "--model", model, "--no-session-persistence"]
-    if add_dir is not None:
-        argv += ["--add-dir", str(add_dir)]
+    read_dir = Path(add_dir).resolve() if add_dir is not None else None
+    argv = build_argv(sendable, model, tools, read_dir)
     try:
-        proc = runner(argv, input=prompt, capture_output=True, text=True, timeout=TIMEOUT_S)
+        proc = _run(argv, prompt, read_dir, runner)
     except subprocess.TimeoutExpired:
         _log(f"timed out after {TIMEOUT_S}s")
         return None

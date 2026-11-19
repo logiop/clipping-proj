@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
-from .. import ytdlp
+from .. import config, ytdlp
 from ..models import Stream
 
 DOWNLOAD_TIMEOUT_S = 3600
@@ -12,7 +12,8 @@ DOWNLOAD_TIMEOUT_S = 3600
 def download(stream: Stream, section: Optional[Tuple[float, float]], dest: Path,
              cookies: Optional[str] = None) -> Path:
     """Download best audio to `dest` (optionally only [start, end] seconds). Raises RuntimeError."""
-    cmd = ytdlp.base_args(cookies) + ["-f", "bestaudio", "--no-playlist", "-o", str(dest), "--force-overwrites"]
+    cmd = ytdlp.base_args(cookies) + ["-f", "bestaudio", "--no-playlist", "-o", str(dest), "--force-overwrites",
+                                         "--ffmpeg-location", str(Path(config.ffmpeg_bin()).parent)]
     if section is not None:
         cmd += ["--download-sections", f"*{section[0]:.2f}-{section[1]:.2f}"]
     cmd.append(stream.url)

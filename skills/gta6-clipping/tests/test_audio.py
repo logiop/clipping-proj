@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from clipping.listen import audio
@@ -22,7 +24,11 @@ def test_download_builds_section_command(monkeypatch, tmp_path):
 
     monkeypatch.setattr(audio.subprocess, "run", fake_run)
     assert audio.download(STREAM, (10.0, 70.5), dest) == dest
-    assert "bestaudio" in calls[0] and "*10.00-70.50" in calls[0]
+    cmd = calls[0]
+    assert "bestaudio" in cmd and "*10.00-70.50" in cmd and "--no-playlist" in cmd
+    assert cmd[cmd.index("-o") + 1] == str(dest)
+    loc = cmd[cmd.index("--ffmpeg-location") + 1]
+    assert loc == str(Path(audio.config.ffmpeg_bin()).parent)
 
 
 def test_download_failure_raises(monkeypatch, tmp_path):

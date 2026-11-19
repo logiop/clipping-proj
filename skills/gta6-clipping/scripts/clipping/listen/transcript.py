@@ -1,5 +1,6 @@
 """Transcript: platform captions first, Whisper as fallback."""
 import re
+import sys
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,7 +77,8 @@ def whisper(audio: Path, model: str, words: bool) -> Tuple[List[Segment], List[W
     """Transcribe with mlx_whisper if importable, else faster-whisper int8.
 
     The model cache comes from the HF_HOME environment variable (set by the launcher).
-    The mlx path does not report language probability; it returns 1.0.
+    The mlx path does not report a language probability: it returns NaN, meaning
+    "unknown - treat as needs review", and language "" when mlx gives none.
     """
     try:
         import mlx_whisper
@@ -87,7 +89,7 @@ def whisper(audio: Path, model: str, words: bool) -> Tuple[List[Segment], List[W
     segs = [Segment(s["start"], s["end"], s["text"].strip()) for s in result["segments"]]
     word_list = [Word(w["start"], w["end"], w["word"].strip(), w.get("probability", 1.0))
                  for s in result["segments"] for w in s.get("words", [])]
-    return segs, word_list, result.get("language", "en"), 1.0
+    return segs, word_list, result.get("language") or "", float("nan")
 
 
 def _whisper_faster(audio: Path, model: str, words: bool):
@@ -101,12 +103,13 @@ def _whisper_faster(audio: Path, model: str, words: bool):
     return segs, word_list, info.language, info.language_probability
 
 
-def get(stream: Stream, audio: Path) -> List[Segment]:
+def get(stream: Stream, audio: Path, cookies: Optional[str] = None) -> List[Segment]:
     """Platform English captions if available, otherwise Whisper `tiny` on the audio."""
     try:
-        url = find_caption_url(ytdlp.info(stream.url, None))
+        url = find_caption_url(ytdlp.info(stream.url, cookies))
         segments = parse_vtt(_fetch_text(url)) if url else []
-    except (RuntimeError, OSError):
+    except (RuntimeError, OSError) as exc:
+        print(f"caption lookup failed ({type(exc).__name__}); falling back to Whisper tiny", file=sys.stderr)
         segments = []
     if segments:
         return segments

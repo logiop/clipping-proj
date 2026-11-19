@@ -15,6 +15,8 @@ DEFAULT_NAME_MAX = 100
 GB = 10**9
 VOLUMES_ROOT = Path("/Volumes")
 STICK_MISSING_FIX = "Chiavetta non trovata: collega KINGSTOM e riprova"
+MOUNT_ROOT_FIX = ("La cartella archivio e' la chiavetta stessa: usa una sottocartella "
+                  "(es. /Volumes/KINGSTOM/Cartella di Claude)")
 
 _ILLEGAL_CHARS = re.compile(r'[:?"*<>|/\\\x00-\x1f\x7f]')
 _SPACES = re.compile(r"\s+")
@@ -64,6 +66,14 @@ def on_external_volume(root: Path, home_dev: Optional[int] = None) -> bool:
     return root.is_dir() and os.stat(root).st_dev != _home_dev(home_dev)
 
 
+def require_archive_root(root: Path, home_dev: Optional[int] = None) -> None:
+    """FileNotFoundError unless root is an existing subfolder (not the mount point) of an external volume."""
+    if not on_external_volume(root, home_dev):
+        raise FileNotFoundError(f"Archive root missing or not on an external volume: {root}")
+    if os.path.ismount(root):
+        raise FileNotFoundError(f"Archive root {root} is a whole volume; use a subfolder of it")
+
+
 def preflight(
     p: Paths, mac_free: int, stick_free: Optional[int], *, home_dev: Optional[int] = None
 ) -> List[Check]:
@@ -76,6 +86,8 @@ def preflight(
     )
     if stick_free is None or not on_external_volume(p.archive, home_dev):
         return [mac, Check("archive", False, STICK_MISSING_FIX)]
+    if os.path.ismount(p.archive):
+        return [mac, Check("archive", False, MOUNT_ROOT_FIX)]
     stick_ok = stick_free >= settings.min_stick_free_bytes
     stick_gb = settings.min_stick_free_bytes // GB
     stick = Check(
@@ -110,8 +122,7 @@ def archive_file(
     size = src.stat().st_size
     if size > max_bytes:
         raise ValueError(f"{src.name} is {size} bytes, over the {max_bytes} byte limit")
-    if not on_external_volume(root, home_dev):
-        raise FileNotFoundError(f"Archive root missing or not on an external volume: {root}")
+    require_archive_root(root, home_dev)
     target = safe_path(root, dest)
     if target.exists():
         raise FileExistsError(f"Refusing to overwrite {target}")

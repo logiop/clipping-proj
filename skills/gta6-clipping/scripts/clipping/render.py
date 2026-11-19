@@ -29,6 +29,9 @@ LUMA_SAMPLE_FRAMES = 5
 NOT_DARK_LUMA = 128.0
 FILTER_SPECIALS = set("\\':,;[] ")
 STDERR_TAIL_CHARS = 1500
+PROBE_TIMEOUT_S = 60
+LUMA_TIMEOUT_S = 300
+RENDER_TIMEOUT_S = 1800
 
 
 def font_path() -> str:
@@ -138,8 +141,9 @@ def _duration(src: Path) -> float:
     cmd = [str(probe) if probe.exists() else "ffprobe", "-v", "error",
            "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(src)]
     try:
-        return float(subprocess.run(cmd, capture_output=True, text=True).stdout.strip())
-    except (ValueError, OSError):
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=PROBE_TIMEOUT_S)
+        return float(proc.stdout.strip())
+    except (ValueError, OSError, subprocess.TimeoutExpired):
         return 0.0
 
 
@@ -158,7 +162,11 @@ def mean_luma(src: Path) -> float:
     cmd = [config.ffmpeg_bin(), "-v", "error", "-i", str(src), "-vf",
            f"fps={rate:.6f},scale=320:-2,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
            "-frames:v", str(LUMA_SAMPLE_FRAMES), "-an", "-f", "null", "-"]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=LUMA_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        print(f"warning: luma measurement timed out for {src}, assuming not dark", file=sys.stderr)
+        return NOT_DARK_LUMA
     values = parse_yavg(proc.stdout)
     if proc.returncode != 0 or not values:
         tail = proc.stderr.strip()[-200:]
@@ -173,7 +181,11 @@ def render(src: Path, out: Path, plan: LayoutPlan, ass_path: Path, hook: str, cr
     credit_file.write_text(credit, encoding="utf-8")
     dark = mean_luma(src) < DARK_LUMA
     graph = filter_graph(plan, ass_path, hook, credit, dark=dark)
-    proc = subprocess.run(command(src, out, graph, fast), capture_output=True, text=True)
+    try:
+        proc = subprocess.run(command(src, out, graph, fast), capture_output=True, text=True,
+                              timeout=RENDER_TIMEOUT_S)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ffmpeg render timed out after {RENDER_TIMEOUT_S} s for {src}") from exc
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg render failed: {proc.stderr[-STDERR_TAIL_CHARS:]}")
     if not out.exists():

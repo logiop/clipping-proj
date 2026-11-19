@@ -188,3 +188,24 @@ def test_font_path_raises_when_none_exist(monkeypatch):
 def test_text_files_named_after_ass_stem():
     hook, credit = render.text_paths(Path("/w/clip1.ass"))
     assert hook.name == "clip1.hook.txt" and credit.name == "clip1.credit.txt"
+
+
+def _timing_out(seen):
+    def run(cmd, **kw):
+        seen.append(kw.get("timeout"))
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout") or 0)
+    return run
+
+
+def test_every_ffmpeg_call_has_a_timeout(monkeypatch, tmp_path, capsys):
+    seen = []
+    monkeypatch.setattr(render.subprocess, "run", _timing_out(seen))
+    assert render._duration(tmp_path / "c.mp4") == 0.0
+    assert render.mean_luma(tmp_path / "c.mp4") == render.NOT_DARK_LUMA
+    monkeypatch.setattr(render, "mean_luma", lambda src: 100.0)
+    monkeypatch.setattr(render, "font_path", lambda: "/f.ttf")
+    with pytest.raises(RuntimeError, match="timed out"):
+        render.render(tmp_path / "c.mp4", tmp_path / "o.mp4", FIT, tmp_path / "c.ass", "h", "@s", fast=True)
+    assert seen == [render.PROBE_TIMEOUT_S, render.PROBE_TIMEOUT_S, render.LUMA_TIMEOUT_S,
+                    render.RENDER_TIMEOUT_S]
+    assert render.RENDER_TIMEOUT_S >= 1800

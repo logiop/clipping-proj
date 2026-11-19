@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -78,3 +79,13 @@ def test_save_refuses_missing_archive_root(tmp_path):
     with pytest.raises(FileNotFoundError):
         save(root / "gta6-clips" / "state" / "x.json", RunState(), root, home_dev=EXT)
     assert not root.exists()
+
+
+def test_save_refuses_archive_root_that_is_a_mount_point(tmp_path, monkeypatch):
+    from clipping import storage
+    root = tmp_path / "stick"
+    root.mkdir()
+    monkeypatch.setattr(storage.os.path, "ismount", lambda p: Path(p).resolve() == root.resolve())
+    with pytest.raises(FileNotFoundError):
+        save(root / "gta6-clips" / "state" / "x.json", RunState(), root, home_dev=EXT)
+    assert not (root / "gta6-clips").exists()

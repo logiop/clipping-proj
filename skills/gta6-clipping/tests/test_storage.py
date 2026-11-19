@@ -206,3 +206,22 @@ def test_clean_work_refuses_work_root_outside_home(tmp_path):
     with pytest.raises(UnsafePathError):
         clean_work(work_root / "s1", work_root, home=home, volumes=tmp_path / "Volumes")
     assert (work_root / "s1").exists()
+
+
+def _mount_at(monkeypatch, root):
+    from clipping import storage
+    monkeypatch.setattr(storage.os.path, "ismount", lambda p: Path(p).resolve() == Path(root).resolve())
+
+
+def test_archive_root_that_is_a_mount_point_is_refused(tmp_path, monkeypatch):
+    root = tmp_path / "stick"
+    root.mkdir()
+    _mount_at(monkeypatch, root)
+    src = tmp_path / "c.mp4"
+    src.write_bytes(b"x")
+    with pytest.raises(FileNotFoundError, match="subfolder"):
+        archive_file(src, root / "c.mp4", root, home_dev=EXT)
+    assert not (root / "c.mp4").exists()
+    checks = preflight(paths({"CLIP_ARCHIVE": str(root)}), 50_000_000_000, 10_000_000_000, home_dev=EXT)
+    archive = next(c for c in checks if c.name == "archive")
+    assert not archive.ok and "sottocartella" in archive.fix

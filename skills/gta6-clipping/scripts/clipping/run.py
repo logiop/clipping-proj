@@ -52,14 +52,24 @@ def _section_arg(text: str) -> Tuple[float, float]:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from exc
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     settings = config.load()
     ap = argparse.ArgumentParser(prog="gta6clip", description="Vertical GTA 6 clips from streams, archived to the stick.")
     ap.add_argument("urls", nargs="*", metavar="URL", help="stream/VOD links (none: find streams)")
     ap.add_argument("--find", action="store_true", help="also find recent GTA 6 streams")
     ap.add_argument("--list", action="store_true", help="only list found streams")
-    ap.add_argument("--streams", type=int, default=DEFAULT_STREAMS, help="streams to find")
-    ap.add_argument("--clips", type=int, default=settings.clips_per_stream, help="clips per stream")
+    ap.add_argument("--streams", type=_positive_int, default=DEFAULT_STREAMS, help="streams to find")
+    ap.add_argument("--clips", type=_positive_int, default=settings.clips_per_stream, help="clips per stream")
     ap.add_argument("--section", type=_section_arg, help="only A-B of the stream (s, m:ss or h:mm:ss)")
     ap.add_argument("--cookies", metavar="BROWSER", help="browser to read cookies from")
     ap.add_argument("--layout", choices=FORCED_VALUES, default="auto")
@@ -67,8 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--fast", action="store_true", help="hardware encoder")
     ap.add_argument("--redo", action="store_true", help="ignore saved stage files")
     ap.add_argument("--keep-work", action="store_true", help="keep the Mac work folder after archiving")
-    ap.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL, help="streams at a time")
-    ap.add_argument("--pick-parallel", type=int, default=DEFAULT_PICK_PARALLEL, help="Claude pick calls at a time")
+    ap.add_argument("--parallel", type=_positive_int, default=DEFAULT_PARALLEL, help="streams at a time")
+    ap.add_argument("--pick-parallel", type=_positive_int, default=DEFAULT_PICK_PARALLEL, help="Claude pick calls at a time")
     return ap
 
 

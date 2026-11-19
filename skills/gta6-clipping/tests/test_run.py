@@ -431,3 +431,12 @@ def test_every_clip_failing_fails_the_stream_and_keeps_work(tmp_path, monkeypatc
     with pytest.raises(RuntimeError, match="all 1 clips failed"):
         run.process_stream(STREAM, run.stages.Options(), p, "2026-11-19")
     assert (p.work / "youtubeabc").exists()
+
+
+@pytest.mark.parametrize("flag", ["--clips", "--streams", "--pick-parallel", "--parallel"])
+@pytest.mark.parametrize("value", ["0", "-1", "x"])
+def test_cli_counts_must_be_at_least_one(flag, value, capsys):
+    with pytest.raises(SystemExit):
+        parse_args([flag, value])
+    assert flag in capsys.readouterr().err
+    assert getattr(parse_args([flag, "2"]), flag.lstrip("-").replace("-", "_")) == 2

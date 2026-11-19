@@ -1,3 +1,4 @@
+from clipping import doctor
 from clipping.doctor import check_disk, check_ffmpeg
 
 
@@ -73,3 +74,14 @@ def test_filters_output_is_empty_when_ffmpeg_missing(monkeypatch):
 
     monkeypatch.setattr(doctor.subprocess, "run", boom)
     assert doctor._filters_output() == ""
+
+
+def test_fix_messages_point_to_the_installed_setup_script(monkeypatch):
+    from pathlib import Path
+    expected = Path(doctor.__file__).resolve().parents[1] / "setup.sh"
+    assert doctor.SETUP_SH == expected and expected.exists()
+    monkeypatch.setattr(doctor.importlib.util, "find_spec", lambda name: None)
+    assert str(expected) in doctor._check_module("yt_dlp", "yt-dlp").fix
+    real_paths = doctor.config.paths
+    monkeypatch.setattr(doctor.config, "paths", lambda: real_paths({"HOME": "/nonexistent"}))
+    assert str(expected) in doctor._check_yunet().fix

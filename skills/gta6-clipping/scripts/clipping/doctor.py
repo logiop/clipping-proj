@@ -10,6 +10,9 @@ from clipping import config
 
 YUNET_FILE = "face_detection_yunet_2023mar.onnx"
 FFMPEG_FIX = "brew install ffmpeg-full  (the build must include the ass filter)"
+# scripts/setup.sh next to this package: ~/.claude/skills/gta6-clipping/scripts/setup.sh once
+# installed, the repo copy when run from a checkout.
+SETUP_SH = Path(__file__).resolve().parents[1] / "setup.sh"
 
 
 @dataclass(frozen=True)
@@ -51,13 +54,13 @@ def _check_binary(name: str, fix: str) -> Check:
 
 def _check_module(module: str, pip_name: str) -> Check:
     found = importlib.util.find_spec(module) is not None
-    fix = "" if found else f"Run skills/gta6-clipping/scripts/setup.sh (missing {pip_name})"
+    fix = "" if found else f"Run {SETUP_SH} (missing {pip_name})"
     return Check(f"python:{pip_name}", found, fix)
 
 
 def _check_yunet() -> Check:
     present = (config.paths().models / YUNET_FILE).exists()
-    fix = "" if present else "Run skills/gta6-clipping/scripts/setup.sh (downloads the YuNet model)"
+    fix = "" if present else f"Run {SETUP_SH} (downloads the YuNet model)"
     return Check("yunet model", present, fix)
 
 

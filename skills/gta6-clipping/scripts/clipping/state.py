@@ -38,8 +38,7 @@ def load(path: Path) -> RunState:
 
 def save(path: Path, s: RunState, root: Path, *, home_dev: Optional[int] = None) -> None:
     """Write the state through safe_path; never creates the archive root itself."""
-    if not storage.on_external_volume(Path(root), home_dev):
-        raise FileNotFoundError(f"Archive root missing or not on an external volume: {root}")
+    storage.require_archive_root(Path(root), home_dev)
     target = storage.safe_path(root, path)
     part = storage.safe_path(root, target.with_name(target.name + ".part"))
     target.parent.mkdir(parents=True, exist_ok=True)

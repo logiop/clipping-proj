@@ -32,7 +32,7 @@ def ask(prompt: str, schema: dict, model: str, tools: str = "",
     """Run one `claude -p` call; None on any failure or if the reply does not validate."""
     sendable = {k: v for k, v in schema.items() if k != "$schema"}
     argv = ["claude", "-p", "--tools", tools, "--output-format", "json",
-            "--json-schema", json.dumps(sendable), "--model", model]
+            "--json-schema", json.dumps(sendable), "--model", model, "--no-session-persistence"]
     if add_dir is not None:
         argv += ["--add-dir", str(add_dir)]
     try:

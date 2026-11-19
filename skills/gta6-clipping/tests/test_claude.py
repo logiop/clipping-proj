@@ -33,6 +33,7 @@ def test_ask_passes_no_tools():
     assert argv[argv.index("--output-format") + 1] == "json"
     assert kw["input"] == "hi" and kw["timeout"] == 300
     assert "--add-dir" not in argv
+    assert "--no-session-persistence" in argv
 
 
 def test_ask_strips_dollar_schema_and_adds_dir(tmp_path):

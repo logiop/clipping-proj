@@ -1,4 +1,5 @@
 """Pick clip moments: chunk the transcript, annotate, ask Claude, select the top N."""
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +13,8 @@ from .schemas import EVENTS, MOMENTS_SCHEMA
 
 PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "pick.md"
 CHAT_BUCKET_S = 5
+_DATA_TAG = re.compile(r"<(/?stream_data)", re.IGNORECASE)
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
 MIN_GAP_S = 60
 
 Chunk = Tuple[float, float, List[Segment]]
@@ -52,16 +55,20 @@ def annotate(chunk_segments: Sequence[Segment], spikes, bursts) -> str:
     return "\n".join(lines)
 
 
+def _neutralize(text: str) -> str:
+    """Defang stream_data tags so stream text cannot close the data block."""
+    return _DATA_TAG.sub(lambda m: "\u2039" + m.group(1), text)
+
+
 def build_prompt(stream: Stream, chunk_text: str, start: float, end: float) -> str:
-    """Fill prompts/pick.md; plain replace so braces in transcript text are safe."""
+    """Fill prompts/pick.md in one pass, so braces in stream text are never re-substituted."""
     values = {
-        "{streamer}": stream.streamer, "{title}": stream.title, "{platform}": stream.platform,
-        "{start}": str(int(start)), "{end}": str(int(end)), "{events}": ", ".join(EVENTS),
+        "streamer": _neutralize(stream.streamer), "title": _neutralize(stream.title),
+        "platform": _neutralize(stream.platform), "start": str(int(start)), "end": str(int(end)),
+        "events": ", ".join(EVENTS), "chunk_text": _neutralize(chunk_text),
     }
     template = PROMPT_PATH.read_text(encoding="utf-8")
-    for key, value in values.items():
-        template = template.replace(key, value)
-    return template.replace("{chunk_text}", chunk_text)
+    return _PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), template)
 
 
 def select(moments: Sequence[Moment], n: int, min_gap: float = MIN_GAP_S) -> List[Moment]:
@@ -76,6 +83,16 @@ def select(moments: Sequence[Moment], n: int, min_gap: float = MIN_GAP_S) -> Lis
 
 
 def _pick_chunk(stream, chunk: Chunk, spikes, bursts, model, runner) -> List[Moment]:
+    """Moments for one chunk; any unexpected error is logged and yields []."""
+    try:
+        return _pick_chunk_unsafe(stream, chunk, spikes, bursts, model, runner)
+    except Exception as exc:  # one bad chunk must not abort the run
+        label = f"{_timestamp(chunk[0])}-{_timestamp(chunk[1])}"
+        print(f"pick: chunk {label} crashed ({type(exc).__name__}), skipped", file=sys.stderr)
+        return []
+
+
+def _pick_chunk_unsafe(stream, chunk: Chunk, spikes, bursts, model, runner) -> List[Moment]:
     start, end, segs = chunk
     prompt = build_prompt(stream, annotate(segs, spikes, bursts), start, end)
     data = claude.ask(prompt, MOMENTS_SCHEMA, model, runner=runner)

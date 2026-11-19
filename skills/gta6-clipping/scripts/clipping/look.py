@@ -49,14 +49,22 @@ def _listing(items: Sequence[MomentFrames]) -> str:
 
 
 def _frames_dir(items: Sequence[MomentFrames]) -> Path:
-    parents = {str(p.parent) for _, frames in items for p in frames}
-    return Path(os.path.commonpath(sorted(parents)))
+    parents = {str(p.resolve().parent) for _, frames in items for p in frames}
+    try:
+        return Path(os.path.commonpath(sorted(parents)))
+    except ValueError as exc:
+        raise ValueError(f"frames have no common directory: {exc}") from exc
 
 
 def _fallback(items: Sequence[MomentFrames]) -> List[Moment]:
     kept = []
     for m, frames in items:
-        if static_score(frame_diffs(frames)) > STATIC_DROP_SCORE:
+        try:
+            diffs = frame_diffs(frames)
+        except ImportError as exc:
+            print(f"look: cv2 unavailable ({exc}), keeping all moments", file=sys.stderr)
+            return [mm for mm, _ in items]
+        if static_score(diffs) > STATIC_DROP_SCORE:
             print(f"look: dropping {m.start:.0f}-{m.end:.0f} (static screen)", file=sys.stderr)
             continue
         kept.append(m)
@@ -64,13 +72,23 @@ def _fallback(items: Sequence[MomentFrames]) -> List[Moment]:
 
 
 def check(moments_with_frames: Sequence[MomentFrames], model: str,
-          ask: Callable = claude.ask) -> List[Moment]:
-    """Drop moments Claude judges non-gameplay; missing verdicts keep the moment."""
+          ask: Callable = claude.ask, forbid: Tuple[Path, ...] = ()) -> List[Moment]:
+    """Drop moments Claude judges non-gameplay; missing verdicts keep the moment.
+
+    Claude gets read access to the frames directory, so callers keep frames in a dedicated
+    `frames/` subfolder and pass the work root (and anything else sensitive) in `forbid`;
+    ValueError is raised if the frames directory equals or contains a forbidden path.
+    """
     items = list(moments_with_frames)
     if not items:
         return []
+    frames_dir = _frames_dir(items)
+    for path in forbid:
+        resolved = path.resolve()
+        if resolved == frames_dir or frames_dir in resolved.parents:
+            raise ValueError(f"frames directory {frames_dir} would expose {resolved}; use a dedicated frames/ folder")
     prompt = PROMPT_PATH.read_text(encoding="utf-8").replace("{listing}", _listing(items))
-    reply: Optional[dict] = ask(prompt, LOOK_SCHEMA, model, tools="Read", add_dir=_frames_dir(items))
+    reply: Optional[dict] = ask(prompt, LOOK_SCHEMA, model, tools="Read", add_dir=frames_dir)
     if reply is None:
         print("look: Claude visual check failed, using static-screen fallback", file=sys.stderr)
         return _fallback(items)

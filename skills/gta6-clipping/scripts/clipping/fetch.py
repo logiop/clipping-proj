@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
-from . import config, ytdlp
+from . import config, look, ytdlp
 from .models import Moment, Stream
 
 DEFAULT_PAD_S = 2.0
@@ -23,7 +23,7 @@ def _download(stream: Stream, m: Moment, dest: Path, cookies: Optional[str], fmt
     start, end = clip_section(m)
     out = dest / name
     cmd = ytdlp.base_args(cookies) + [
-        "-f", fmt, "--no-playlist", "--force-overwrites", "-o", str(out),
+        "-f", fmt, "--merge-output-format", "mp4", "--no-playlist", "--force-overwrites", "-o", str(out),
         "--ffmpeg-location", str(Path(config.ffmpeg_bin()).parent),
         "--download-sections", f"*{start:.2f}-{end:.2f}", *extra, stream.url]
     dest.mkdir(parents=True, exist_ok=True)
@@ -44,7 +44,11 @@ def _stem(m: Moment) -> str:
 
 def download_preview(stream: Stream, m: Moment, dest: Path, cookies: Optional[str],
                      runner: Callable = subprocess.run) -> Path:
-    """Low-res (<=360p) copy of the candidate window, used only to grab frames."""
+    """Low-res (<=360p) copy of the candidate window, used only to grab frames.
+
+    No --force-keyframes-at-cuts here: frame times may drift by up to one keyframe interval,
+    which is acceptable for judging gameplay.
+    """
     return _download(stream, m, dest, cookies, PREVIEW_FORMAT, f"preview_{_stem(m)}.mp4", (), runner)
 
 
@@ -72,3 +76,17 @@ def extract_frames(preview: Path, offsets: Sequence[float], out_dir: Path, tag: 
             raise RuntimeError(f"frame extraction failed for {preview}: {proc.stderr.strip()[-300:]}")
         frames.append(out)
     return frames
+
+
+def preview_offsets(m: Moment, times: Sequence[float]) -> List[float]:
+    """Convert stream-time seconds to offsets into the preview (which starts at clip_section start)."""
+    origin = clip_section(m)[0]
+    return [max(0.0, t - origin) for t in times]
+
+
+def moment_frames(stream: Stream, m: Moment, frames_dir: Path, cookies: Optional[str],
+                  k: int = look.DEFAULT_FRAME_COUNT, runner: Callable = subprocess.run) -> List[Path]:
+    """Download the 360p preview of the padded window and extract k frames from inside the moment."""
+    preview = download_preview(stream, m, frames_dir.parent, cookies, runner=runner)
+    offsets = preview_offsets(m, look.frame_times(m, k))
+    return extract_frames(preview, offsets, frames_dir, f"m{_stem(m)}", runner=runner)

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import cv2
+import pytest
 import numpy as np
 
 from clipping import look
@@ -51,6 +52,9 @@ def test_look_drops_non_gameplay():
     assert [m.start for m in kept] == [0]
     assert seen["tools"] == "Read" and seen["add_dir"] == Path("/w/frames")
     assert "/w/frames/b.jpg" in seen["prompt"]
+    prompt = seen["prompt"]
+    assert prompt.index("Moment 0 (0s-30s") < prompt.index("/w/frames/a.jpg") < prompt.index("Moment 1 (60s-90s")
+    assert prompt.index("Moment 1 (60s-90s") < prompt.index("/w/frames/b.jpg")
 
 
 def test_look_keeps_moment_without_verdict():
@@ -70,3 +74,32 @@ def test_look_empty_input_makes_no_call():
     def boom(*a, **k):
         raise AssertionError("should not call claude")
     assert look.check([], "sonnet", ask=boom) == []
+
+
+def test_look_ignores_out_of_range_and_duplicate_false_drops():
+    items = [(moment(0, 30), [Path("/w/frames/a.jpg")]), (moment(60, 90), [Path("/w/frames/b.jpg")])]
+    verdicts = [{"index": 7, "gameplay": False, "why": "x"},
+                {"index": 0, "gameplay": True, "why": "ok"}, {"index": 0, "gameplay": False, "why": "menu"}]
+    kept = look.check(items, "sonnet", ask=lambda *a, **k: {"verdicts": verdicts})
+    assert [m.start for m in kept] == [60]
+
+
+def test_look_refuses_frames_dir_that_exposes_forbidden_path(tmp_path):
+    work = tmp_path / "work"
+    (work / "frames").mkdir(parents=True)
+    ok = [(moment(), [work / "frames" / "a.jpg"])]
+    bad = [(moment(), [work / "a.jpg"])]
+    ask = lambda *a, **k: {"verdicts": []}
+    assert len(look.check(ok, "sonnet", ask=ask, forbid=(work,))) == 1
+    with pytest.raises(ValueError):
+        look.check(bad, "sonnet", ask=ask, forbid=(work,))
+    with pytest.raises(ValueError):
+        look.check(bad, "sonnet", ask=ask, forbid=(work / "stage.json",))
+
+
+def test_look_fallback_keeps_moments_when_cv2_missing(monkeypatch, tmp_path):
+    def no_cv2(frames):
+        raise ImportError("no cv2")
+    monkeypatch.setattr(look, "frame_diffs", no_cv2)
+    items = [(moment(0, 30), frames_for(tmp_path, "s", noisy=False))]
+    assert len(look.check(items, "sonnet", ask=lambda *a, **k: None)) == 1

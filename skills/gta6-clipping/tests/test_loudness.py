@@ -54,3 +54,22 @@ def test_measure_raises_on_failure(monkeypatch):
     import pytest
     with pytest.raises(RuntimeError):
         loudness.measure(Path("a.m4a"))
+
+
+def test_spikes_half_silence_does_not_hide_yell():
+    per_sec = [-30.0 + (i % 3) for i in range(30)] + [-91.0] * 30  # second half silent (fill value)
+    per_sec[10] = -8.0
+    assert [s for s, _ in loudness.spikes(per_sec)] == [10]
+
+
+def test_spikes_ignore_seconds_below_silence_floor():
+    per_sec = [-30.0 + (i % 3) for i in range(20)] + [-65.0, -70.0]
+    assert loudness.spikes(per_sec) == []
+
+
+def test_spikes_default_z_flags_top_of_compressed_speech():
+    # loud, steadily compressed speech: the loudest few seconds still count as spikes
+    per_sec = [-16.0 + ((i * 7) % 11) - 5 for i in range(200)]
+    per_sec[50] = -6.0
+    result = loudness.spikes(per_sec)
+    assert 50 in [s for s, _ in result] and len(result) < 60

@@ -1,13 +1,21 @@
 """Thin wrappers around the yt-dlp CLI."""
 import json
 import subprocess
+import sys
+from pathlib import Path
 from typing import Optional
 
 TIMEOUT_S = 180
 
 
+def executable() -> str:
+    """yt-dlp installed next to the running Python (the private venv), else the one on PATH."""
+    beside = Path(sys.executable).parent / "yt-dlp"
+    return str(beside) if beside.exists() else "yt-dlp"
+
+
 def base_args(cookies: Optional[str]) -> list:
-    args = ["yt-dlp", "--js-runtimes", "node", "--no-warnings"]
+    args = [executable(), "--js-runtimes", "node", "--no-warnings"]
     if cookies:
         args += ["--cookies-from-browser", cookies]
     return args

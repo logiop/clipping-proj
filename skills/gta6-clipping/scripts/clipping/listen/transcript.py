@@ -109,7 +109,7 @@ def load_audio(audio: Path, runner: Callable = subprocess.run):
     if proc.returncode != 0:
         tail = proc.stderr.decode("utf-8", errors="replace").strip()[-300:]
         raise RuntimeError(f"audio decode failed for {audio}: {tail}")
-    return np.frombuffer(proc.stdout, dtype="<f4").astype(np.float32)
+    return np.frombuffer(proc.stdout, dtype="<f4").astype(np.float32, copy=False)
 
 
 def _whisper_faster(audio: Path, model: str, words: bool):

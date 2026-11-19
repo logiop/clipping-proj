@@ -1,5 +1,6 @@
 """POST.md (ready-to-post text per clip), clips.json and report.json, written in the Mac work folder."""
 import json
+import urllib.parse
 from dataclasses import asdict
 from pathlib import Path
 from typing import List, Mapping, Sequence, Tuple
@@ -16,8 +17,10 @@ def timestamp_link(stream: Stream, seconds: float) -> str:
         stamp = f"{total // 3600}h{total // 60 % 60:02d}m{total % 60:02d}s"
     else:
         stamp = f"{total}s"
-    sep = "&" if "?" in stream.url else "?"
-    return f"{stream.url}{sep}t={stamp}"
+    parts = urllib.parse.urlsplit(stream.url)
+    query = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True) if k != "t"]
+    query.append(("t", stamp))
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
 
 
 def _clip_md(stream: Stream, m: Moment, file: Path) -> List[str]:
@@ -49,15 +52,18 @@ def _clips_json(items: Sequence[ClipItem]) -> str:
 
 
 def write(work_out: Path, stream: Stream, items: Sequence[ClipItem],
-          seconds: Mapping[str, float]) -> List[Path]:
-    """Write POST.md, clips.json and report.json into `work_out`; return their paths."""
+          seconds: Mapping[str, float], stamp: str) -> List[Path]:
+    """Write POST_<stamp>.md, clips_<stamp>.json and report_<stamp>.json into `work_out`.
+
+    The stamp (run start time) keeps several runs of one stream in the same day folder apart.
+    """
     work_out.mkdir(parents=True, exist_ok=True)
     report = {"stream": asdict(stream), "clips": len(items),
               "seconds": {k: round(v, 1) for k, v in seconds.items()}}
     contents = {
-        "POST.md": render_md(stream, items),
-        "clips.json": _clips_json(items),
-        "report.json": json.dumps(report, ensure_ascii=False, indent=2),
+        f"POST_{stamp}.md": render_md(stream, items),
+        f"clips_{stamp}.json": _clips_json(items),
+        f"report_{stamp}.json": json.dumps(report, ensure_ascii=False, indent=2),
     }
     paths = []
     for name, text in contents.items():

@@ -137,3 +137,31 @@ def test_detect_faces_blank_frame_returns_empty():
     except FileNotFoundError:
         pytest.skip("YuNet model not installed")
     assert result == []
+
+
+def test_left_edge_mid_height_cam_is_cam():
+    """Kai's layout: cam on the left edge at mid-height (face ~ x 60-330, y 380-560 in 1920x1080)."""
+    frames = [[Box(60 + (i % 3) * 4, 380 + (i % 2) * 6, 270, 180)] for i in range(10)]
+    cam = layout.facecam_box(frames, W, H)
+
+    assert cam is not None
+    assert_valid_crop(cam, W, H, 1080 / 640)
+    assert cam.x <= 60 and cam.x + cam.w >= 330
+
+
+def test_bottom_band_cam_is_cam():
+    frames = [[Box(900, 900, 80, 80)] for _ in range(10)]  # center x, bottom 30% of height
+
+    assert layout.facecam_box(frames, W, H) is not None
+
+
+def test_face_moving_through_center_is_not_cam():
+    frames = [[Box(700 + i * 50, 450, 80, 80)] for i in range(10)]
+
+    assert layout.facecam_box(frames, W, H) is None
+
+
+def test_center_band_face_just_inside_is_not_cam():
+    frames = [[Box(700, 400, 80, 80)] for _ in range(10)]  # center at x 740 (>35% of 1920), y 440
+
+    assert layout.facecam_box(frames, W, H) is None

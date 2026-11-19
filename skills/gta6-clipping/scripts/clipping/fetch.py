@@ -54,9 +54,12 @@ def download_preview(stream: Stream, m: Moment, dest: Path, cookies: Optional[st
 
 def download_clip(stream: Stream, m: Moment, dest: Path, cookies: Optional[str],
                   runner: Callable = subprocess.run) -> Path:
-    """1080p copy of the padded candidate window. Raises RuntimeError."""
-    return _download(stream, m, dest, cookies, CLIP_FORMAT, f"clip_{_stem(m)}.mp4",
-                     ("--force-keyframes-at-cuts",), runner)
+    """1080p copy of the padded candidate window. Raises RuntimeError.
+
+    No --force-keyframes-at-cuts (it re-encodes, minutes per clip): the cut snaps to keyframes,
+    the pad absorbs that, and captions and render both read this same file, so they stay aligned.
+    """
+    return _download(stream, m, dest, cookies, CLIP_FORMAT, f"clip_{_stem(m)}.mp4", (), runner)
 
 
 def extract_frames(preview: Path, offsets: Sequence[float], out_dir: Path, tag: str,

@@ -11,7 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
-from . import config, doctor, find, post, stages, state, storage, ytdlp
+from . import archiving, config, doctor, find, post, stages, state, storage, ytdlp
+from .archiving import archive_stream, out_dir  # noqa: F401 (public API of run)
 from .layout import FORCED_VALUES
 from .models import Moment, Stream
 
@@ -19,6 +20,7 @@ DEFAULT_STREAMS = 3
 DEFAULT_PARALLEL = 2
 DEFAULT_PICK_PARALLEL = 4
 PLATFORMS = ("youtube", "twitch")
+WHOLE_STREAM_DONE = 1e9  # processed-until for a stream of unknown length: done once processed whole
 
 
 def parse_time(text: str) -> float:
@@ -98,46 +100,21 @@ def stream_from_url(url: str, cookies: Optional[str], info: Callable = ytdlp.inf
                   title=data.get("title") or "", duration=duration, is_live=is_live)
 
 
-def out_dir(p: config.Paths, stream: Stream, day: str) -> Path:
-    return p.out / day / f"{storage.safe_name(stream.streamer)}__{storage.safe_name(stream.title)}"
-
-
-def _already_archived(src: Path, dest: Path, root: Path) -> bool:
-    target = storage.safe_path(root, dest)
-    return target.exists() and target.stat().st_size == src.stat().st_size
-
-
-def archive_stream(work_dir: Path, files: List[Path], dest_dir: Path, p: config.Paths, keep_work: bool,
-                   archive: Callable = storage.archive_file, clean: Callable = storage.clean_work) -> List[Path]:
-    """Copy every file to dest_dir on the stick; then (unless keep_work) delete work_dir.
-
-    A file already archived with the same size (an interrupted earlier run) is not copied again.
-    Any error propagates and leaves work_dir untouched.
-    """
-    archived = []
-    for f in files:
-        dest = dest_dir / f.name
-        if _already_archived(f, dest, p.archive):
-            archived.append(storage.safe_path(p.archive, dest))
-            continue
-        archived.append(archive(f, dest, p.archive))
-    if not keep_work:
-        clean(work_dir, p.work)
-    return archived
-
-
 def choose_section(stream: Stream, s: state.RunState,
                    explicit: stages.Section) -> Optional[Tuple[stages.Section, float]]:
-    """(audio section or None for all, processed-until) — or None when there is nothing new."""
+    """(audio section or None for all, processed-until) — or None when a live stream has nothing new.
+
+    A VOD without --section is processed whole on every run (already-clipped moments are
+    filtered later). A stream without a known duration is processed whole and marked done.
+    """
     if explicit is not None:
         return explicit, explicit[1]
-    duration = float(stream.duration or 0.0)
+    if not stream.duration:
+        return None, WHOLE_STREAM_DONE
     if stream.is_live:
-        nxt = state.next_section(s, duration)
+        nxt = state.next_section(s, float(stream.duration))
         return (nxt, nxt[1]) if nxt else None
-    if s.processed_until and s.processed_until >= duration:
-        return None
-    return None, duration
+    return None, float(stream.duration)
 
 
 def _log(label: str, stage: str, seconds: float) -> None:
@@ -160,10 +137,10 @@ def _select(stream, work, section, opts, p, s, label) -> Tuple[List[Moment], dic
     return chosen, {"listen": t_listen, "pick": t_pick, "look": t_look}
 
 
-def _make_clips(stream, work, chosen, opts, label) -> Tuple[List[Tuple[Moment, Path]], dict]:
+def _make_clips(stream, work, chosen, opts, label, meta) -> Tuple[List[Tuple[Moment, Path]], dict]:
     items, totals = [], {}
     for i, m in enumerate(chosen):
-        moment, out, timings = stages.clip_stage(stream, work, f"{i + 1:02d}", m, opts)
+        moment, out, timings = stages.clip_stage(stream, work, archiving.clip_name(meta, i), m, opts)
         items.append((moment, out))
         totals = {k: totals.get(k, 0.0) + timings.get(k, 0.0) for k in {*totals, *timings}}
     for stage in ("fetch", "layout", "captions", "render"):
@@ -171,17 +148,21 @@ def _make_clips(stream, work, chosen, opts, label) -> Tuple[List[Tuple[Moment, P
     return items, totals
 
 
-def _finish(stream, work, items, seconds, opts, p, day, label) -> List[Path]:
-    posted = post.write(work / "out", stream, [(m, Path(out.name)) for m, out in items], seconds)
+def _finish(stream, work, items, seconds, opts, p, meta, label, save_state) -> List[Path]:
+    posted = post.write(work / "out", stream, [(m, Path(out.name)) for m, out in items], seconds, meta.stamp)
     files = [out for _, out in items] + posted
     archived, _ = _timed(label, "archive", lambda: archive_stream(
-        work, files, out_dir(p, stream, day), p, opts.keep_work))
+        work, files, out_dir(p, stream, meta.day), p, opts.keep_work,
+        before_clean=lambda: save_state([m for m, _ in items])))
     return archived
 
 
-def process_stream(url: str, opts: stages.Options, p: config.Paths, day: str) -> List[Path]:
-    """Run every stage for one stream; returns the archived paths."""
-    stream = stream_from_url(url, opts.cookies)
+def process_stream(stream: Stream, opts: stages.Options, p: config.Paths, day: str) -> List[Path]:
+    """Run every stage for one stream; returns the archived paths.
+
+    The run state is saved after the archive succeeded and before the work folder is deleted,
+    so a failed save leaves the work folder (and the finished clips) in place.
+    """
     label = stream.streamer
     st_path = state.state_file(p, stream.id)
     s = state.load(st_path)
@@ -194,29 +175,45 @@ def process_stream(url: str, opts: stages.Options, p: config.Paths, day: str) ->
     work.mkdir(parents=True, exist_ok=True)
     if stages.cached_section_differs(work, section):
         opts = replace(opts, redo=True)
+    meta = archiving.run_meta(work, p, stream, day, opts.redo)
+
+    def save_state(moments: List[Moment]) -> None:
+        state.save(st_path, state.advance(s, until, moments), p.archive)
+
     chosen, seconds = _select(stream, work, section, opts, p, s, label)
-    if not chosen:
-        print(f"[{label}] no clips found", flush=True)
-        archived = []
-        if not opts.keep_work:
-            storage.clean_work(work, p.work)
-    else:
-        items, clip_seconds = _make_clips(stream, work, chosen, opts, label)
-        archived = _finish(stream, work, items, {**seconds, **clip_seconds}, opts, p, day, label)
-        chosen = [m for m, _ in items]
-    state.save(st_path, state.advance(s, until, chosen), p.archive)
-    return archived
+    if chosen:
+        items, clip_seconds = _make_clips(stream, work, chosen, opts, label, meta)
+        return _finish(stream, work, items, {**seconds, **clip_seconds}, opts, p, meta, label, save_state)
+    print(f"[{label}] no clips found", flush=True)
+    save_state([])
+    if not opts.keep_work:
+        storage.clean_work(work, p.work)
+    return []
 
 
-def _run_one(process: Callable, url: str, opts: stages.Options, p: config.Paths, day: str) -> bool:
+def _run_one(process: Callable, stream: Stream, opts: stages.Options, p: config.Paths, day: str) -> bool:
     try:
-        archived = process(url, opts, p, day)
+        archived = process(stream, opts, p, day)
     except Exception as exc:  # one failing stream must not stop the others
-        print(f"FAILED {url}: {type(exc).__name__}: {exc}", flush=True)
+        print(f"FAILED {stream.url}: {type(exc).__name__}: {exc}", flush=True)
         return False
     for path in archived:
         print(f"archived {path}", flush=True)
     return True
+
+
+def _resolve_all(urls: Sequence[str], cookies: Optional[str], resolve: Callable) -> Tuple[List[Stream], bool]:
+    """Streams for the URLs, one per stream id (two links to one stream are processed once)."""
+    streams, ok = {}, True
+    for url in urls:
+        try:
+            stream = resolve(url, cookies)
+        except Exception as exc:  # a bad link must not stop the others
+            print(f"FAILED {url}: {type(exc).__name__}: {exc}", flush=True)
+            ok = False
+            continue
+        streams.setdefault(stream.id, stream)
+    return list(streams.values()), ok
 
 
 def _usage_warning(p: config.Paths) -> None:
@@ -237,7 +234,8 @@ def _doctor_ok(checks) -> bool:
 
 
 def main(argv: Optional[Sequence[str]] = None, doctor_checks: Callable = doctor.run_all,
-         process: Callable = process_stream, finder: Callable = find.find_streams) -> int:
+         process: Callable = process_stream, finder: Callable = find.find_streams,
+         resolve: Callable = stream_from_url) -> int:
     args = parse_args(argv)
     if not _doctor_ok(doctor_checks()):
         return 1
@@ -246,12 +244,12 @@ def main(argv: Optional[Sequence[str]] = None, doctor_checks: Callable = doctor.
         for s in found:
             print(f"{s.streamer}  {s.title}  {s.url}")
         return 0
-    urls = list(dict.fromkeys([*args.urls, *(s.url for s in found)]))
+    streams, resolved_ok = _resolve_all([*args.urls, *(s.url for s in found)], args.cookies, resolve)
     p, opts, day = config.paths(), options(args), datetime.now().strftime("%Y-%m-%d")
     with ThreadPoolExecutor(max_workers=max(1, args.parallel)) as pool:
-        results = list(pool.map(lambda u: _run_one(process, u, opts, p, day), urls))
+        results = list(pool.map(lambda st: _run_one(process, st, opts, p, day), streams))
     _usage_warning(p)
-    return 0 if all(results) else 1
+    return 0 if resolved_ok and all(results) else 1
 
 
 if __name__ == "__main__":

@@ -9,6 +9,9 @@ MEASURE_TIMEOUT_S = 1800
 _PTS = re.compile(r"pts_time:(-?\d+(?:\.\d+)?)")
 _RMS = re.compile(r"lavfi\.astats\.Overall\.RMS_level=(\S+)")
 FILTER = "astats=metadata=1:reset=1,ametadata=print:file=-"
+SILENCE_DB = -60.0
+MAD_TO_SIGMA = 1.4826
+DEFAULT_SPIKE_Z = 1.0  # calibrated: 19 spikes on 10 min of Kai Cenat (VZqAPdUvqnQ 3600-4200)
 
 
 def parse_astats(text: str) -> List[Tuple[float, float]]:
@@ -43,15 +46,24 @@ def per_second(samples: Sequence[Tuple[float, float]]) -> List[float]:
     return [peaks.get(s, floor) for s in range(max(peaks) + 1)]
 
 
-def spikes(per_sec: Sequence[float], z: float = 2.0) -> List[Tuple[int, float]]:
-    """Seconds at least z standard deviations above the median, as (second, dB above median)."""
-    if len(per_sec) < 2:
+def spikes(per_sec: Sequence[float], z: float = DEFAULT_SPIKE_Z) -> List[Tuple[int, float]]:
+    """Loud seconds as (second, dB above median), by robust statistics.
+
+    Seconds at or below SILENCE_DB (silence and per_second's gap fill) are ignored, so long
+    quiet stretches cannot hide a yell. Threshold: median + z * 1.4826 * MAD of the remaining
+    seconds; the population stdev is used when the MAD is 0 (a mostly flat signal).
+    """
+    voiced = [db for db in per_sec if db > SILENCE_DB]
+    if len(voiced) < 2:
         return []
-    median = statistics.median(per_sec)
-    deviation = statistics.pstdev(per_sec)
-    if deviation == 0:
+    median = statistics.median(voiced)
+    scale = MAD_TO_SIGMA * statistics.median(abs(db - median) for db in voiced)
+    if scale == 0:
+        scale = statistics.pstdev(voiced)
+    if scale == 0:
         return []
-    return [(s, db - median) for s, db in enumerate(per_sec) if db - median >= z * deviation]
+    return [(s, db - median) for s, db in enumerate(per_sec)
+            if db > SILENCE_DB and db - median >= z * scale]
 
 
 def measure(audio: Path) -> List[float]:

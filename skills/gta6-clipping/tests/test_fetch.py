@@ -38,7 +38,7 @@ def test_download_clip_uses_1080_format_and_section(tmp_path):
     assert out.parent == tmp_path and out.exists()
     assert argv[argv.index("-f") + 1] == "bv*[height<=1080]+ba/b[height<=1080]"
     assert argv[argv.index("--download-sections") + 1] == "*98.00-132.00"
-    assert "--force-keyframes-at-cuts" in argv and "--no-playlist" in argv
+    assert "--force-keyframes-at-cuts" not in argv and "--no-playlist" in argv  # no re-encode; the pad absorbs keyframe snapping
     assert argv[argv.index("--merge-output-format") + 1] == "mp4"
     assert "--ffmpeg-location" in argv
     assert argv[-1] == STREAM.url

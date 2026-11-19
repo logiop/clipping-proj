@@ -190,6 +190,7 @@ def _make_clip(stream: Stream, work: Path, nn: str, m: Moment, opts: Options):
     raw, t = _timed({}, "fetch", lambda: fetch.download_clip(stream, m, clips, opts.cookies))
     os.replace(raw, clip)
     plan, t = _timed(t, "layout", lambda: layout_for(clip, opts.layout))
+    print(f"layout {nn}: {plan.kind}", file=sys.stderr, flush=True)
     (ass_text, flags), t = _timed(t, "captions", lambda: captions.make(extract_wav(clip, clips / f"{nn}.wav"), 0.0))
     ass = clips / f"{nn}.ass"
     ass.write_text(ass_text, encoding="utf-8")

@@ -20,7 +20,8 @@ YUNET_MODEL = "face_detection_yunet_2023mar.onnx"
 FACE_SCORE_THRESHOLD = 0.8
 MIN_PRESENCE = 0.60          # fraction of sampled frames that must contain the face
 STABLE_FRACTION = 0.05       # max center drift from the median, as a fraction of frame width
-CORNER_FRACTION = 0.40       # outer share of width and height that counts as a corner
+EDGE_BAND_X = 0.35           # outer share of the width (left or right) where a cam may sit
+EDGE_BAND_Y = 0.30           # outer share of the height (top or bottom) where a cam may sit
 MAX_CAM_AREA = 0.15          # a facecam face is smaller than this share of the frame
 BIG_FACE_AREA = 0.15         # a face larger than this share of the frame is "big"
 CAM_EXPAND = 1.8
@@ -102,10 +103,11 @@ def _fit_aspect(cx: float, cy: float, w: float, h: float, aspect: float,
     return Box(x, y, out_w, out_h)
 
 
-def _in_corner(cx: float, cy: float, frame_w: int, frame_h: int) -> bool:
-    near_x = cx < frame_w * CORNER_FRACTION or cx > frame_w * (1 - CORNER_FRACTION)
-    near_y = cy < frame_h * CORNER_FRACTION or cy > frame_h * (1 - CORNER_FRACTION)
-    return near_x and near_y
+def _in_edge_band(cx: float, cy: float, frame_w: int, frame_h: int) -> bool:
+    """Face center in the outer 35% of the width OR the outer 30% of the height."""
+    near_x = cx < frame_w * EDGE_BAND_X or cx > frame_w * (1 - EDGE_BAND_X)
+    near_y = cy < frame_h * EDGE_BAND_Y or cy > frame_h * (1 - EDGE_BAND_Y)
+    return near_x or near_y
 
 
 def _median_box(boxes: Sequence[Box]) -> Box:
@@ -117,7 +119,7 @@ def _largest(faces: Sequence[Box]) -> Optional[Box]:
 
 
 def facecam_box(faces_per_frame: Sequence[Sequence[Box]], frame_w: int, frame_h: int) -> Optional[Box]:
-    """Cam crop (aspect 1080:640) around a small, stable, corner face seen in >=60% of frames."""
+    """Cam crop (aspect 1080:640) around a small, stable, edge-band face seen in >=60% of frames."""
     if not faces_per_frame:
         return None
     candidates = [f for f in (_largest(faces) for faces in faces_per_frame) if f is not None]
@@ -127,7 +129,7 @@ def facecam_box(faces_per_frame: Sequence[Sequence[Box]], frame_w: int, frame_h:
     drift = max(abs(f.cx - med.cx) for f in candidates)
     if drift > STABLE_FRACTION * frame_w:
         return None
-    if not _in_corner(med.cx, med.cy, frame_w, frame_h):
+    if not _in_edge_band(med.cx, med.cy, frame_w, frame_h):
         return None
     if med.area >= MAX_CAM_AREA * frame_w * frame_h:
         return None

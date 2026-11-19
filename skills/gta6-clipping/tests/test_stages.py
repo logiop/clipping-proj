@@ -8,7 +8,7 @@ import pytest
 
 from clipping import stages
 from clipping.config import paths
-from clipping.layout import Box
+from clipping.layout import Box, LayoutPlan
 from clipping.listen.transcript import Segment
 from clipping.models import Moment, Stream
 
@@ -134,7 +134,7 @@ def _fake_clip_tools(monkeypatch, calls):
         return out
 
     monkeypatch.setattr(stages.fetch, "download_clip", download_clip)
-    monkeypatch.setattr(stages, "layout_for", lambda clip, forced: f"plan-{forced}")
+    monkeypatch.setattr(stages, "layout_for", lambda clip, forced: LayoutPlan(forced, 1920, 1080))
     monkeypatch.setattr(stages, "extract_wav", lambda clip, wav: wav)
     monkeypatch.setattr(stages.captions, "make", lambda wav, offset: ("ASS", ("non_english", "x")))
     monkeypatch.setattr(stages.render, "render", fake_render)
@@ -148,7 +148,7 @@ def test_clip_stage_renders_and_merges_flags(tmp_path, monkeypatch):
     assert m.flags == ("x", "non_english")
     assert out == tmp_path / "out" / "01.mp4" and out.exists()
     assert (tmp_path / "clips" / "01.mp4").exists() and (tmp_path / "clips" / "01.ass").read_text() == "ASS"
-    assert calls[-1] == ("render", "01.mp4", "01.mp4", "01.ass", "h", "@Kai", True, "plan-face")
+    assert calls[-1] == ("render", "01.mp4", "01.mp4", "01.ass", "h", "@Kai", True, LayoutPlan("face", 1920, 1080))
     assert set(timings) == {"fetch", "layout", "captions", "render"}
     again = stages.clip_stage(STREAM, tmp_path, "01", _m(100, flags=("x",)), opts)
     assert again[0] == m and calls.count("download") == 1

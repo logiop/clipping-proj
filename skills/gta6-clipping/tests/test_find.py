@@ -55,3 +55,13 @@ def test_ytdlp_base_args_adds_cookies_only_when_set():
     args = ytdlp.base_args("chrome")
     assert args[args.index("--js-runtimes") + 1] == "node"
     assert args[args.index("--cookies-from-browser") + 1] == "chrome"
+
+
+def test_ytdlp_prefers_executable_next_to_python(monkeypatch, tmp_path):
+    from clipping import ytdlp
+    exe = tmp_path / "yt-dlp"
+    exe.write_text("")
+    monkeypatch.setattr(ytdlp.sys, "executable", str(tmp_path / "python"))
+    assert ytdlp.base_args(None)[0] == str(exe)
+    exe.unlink()
+    assert ytdlp.base_args(None)[0] == "yt-dlp"

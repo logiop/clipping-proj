@@ -37,9 +37,18 @@ def test_timestamp_link_per_platform():
 
 def test_write_puts_files_in_work_folder(tmp_path):
     out = tmp_path / "out"
-    files = write(out, YT, [(_m(), Path("01.mp4"))], {"listen": 1.5, "pick": 2.0})
-    assert [f.name for f in files] == ["POST.md", "clips.json", "report.json"]
+    files = write(out, YT, [(_m(), Path("01.mp4"))], {"listen": 1.5, "pick": 2.0}, stamp="140501")
+    assert [f.name for f in files] == ["POST_140501.md", "clips_140501.json", "report_140501.json"]
     assert all(f.parent == out for f in files)
-    clips = json.loads((out / "clips.json").read_text())
+    clips = json.loads((out / "clips_140501.json").read_text())
     assert clips[0]["file"] == "01.mp4" and clips[0]["hook"] == "He crashed instantly"
-    assert json.loads((out / "report.json").read_text())["seconds"] == {"listen": 1.5, "pick": 2.0}
+    assert json.loads((out / "report_140501.json").read_text())["seconds"] == {"listen": 1.5, "pick": 2.0}
+
+
+def test_timestamp_link_replaces_existing_t():
+    s = Stream(id="y", url="https://www.youtube.com/watch?v=abc&t=120s", platform="youtube",
+               streamer="@a", title="t", duration=1.0, is_live=False)
+    assert timestamp_link(s, 61) == "https://www.youtube.com/watch?v=abc&t=61s"
+    tw = Stream(id="t", url="https://www.twitch.tv/videos/1?t=0h1m0s", platform="twitch",
+                streamer="@a", title="t", duration=1.0, is_live=False)
+    assert timestamp_link(tw, 5) == "https://www.twitch.tv/videos/1?t=0h00m05s"

@@ -34,18 +34,19 @@ and the new skill does not depend on it.
 ## Install (macOS)
 
 ```bash
-brew install ffmpeg-full node      # ffmpeg needs libass for captions; ffmpeg-full is keg-only
+brew install ffmpeg-full node      # the skill uses ffmpeg-full automatically
 cp -R skills/gta6-clipping ~/.claude/skills/
-bash ~/.claude/skills/gta6-clipping/scripts/setup.sh   # private env in ~/.gta6-clipping, Whisper models
+# plug in the USB stick FIRST (default archive /Volumes/KINGSTOM/Cartella di Claude, override with CLIP_ARCHIVE)
+bash ~/.claude/skills/gta6-clipping/scripts/setup.sh   # venv in ~/.gta6-clipping + YuNet face model
 ```
 
-Then plug in the USB stick (default archive `/Volumes/KINGSTOM/Cartella di Claude`, override with `CLIP_ARCHIVE`).
+setup.sh creates `<archive>/models` only when the stick is mounted, and its doctor run fails if ffmpeg lacks the `ass`
+filter. Whisper models are not installed by setup: they download on the first run into `<archive>/models`.
 Requirements: Claude Code (picking runs on your own subscription), Mac >= 5 GB free, stick >= 2 GB free.
 
 ## Run
 
 ```bash
-export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"
 G=~/.claude/skills/gta6-clipping/scripts/gta6clip
 bash $G "<STREAM_URL>" --clips 3 --fast
 bash $G --find --list                      # biggest GTA streams right now
@@ -60,9 +61,9 @@ inside the archive root and never deletes anything on the stick. Age-restricted 
 See `skills/gta6-clipping/SKILL.md` for the launch-day playbook and review checklist.
 
 ### Gotchas we hit
-- `No such filter: 'ass'`: Homebrew's plain ffmpeg has no libass. Use `ffmpeg-full` on PATH as above.
+- ffmpeg: Homebrew's plain ffmpeg has no libass; the skill picks `ffmpeg-full` automatically and setup's doctor fails without the `ass` filter.
 - Installing `ffmpeg-full` can upgrade x265 and break plain `ffmpeg`; fix with `brew reinstall ffmpeg`.
-- Non-English streamers (e.g. Hindi) give garbled captions; Whisper `base` also mishears words.
+- Clips with unknown or non-English language are flagged `non_english`, unreliable transcription `low_confidence`; both show "⚠ needs review" in POST_<HHMMSS>.md and need a human check or skip.
 - Layout `fit` leaves big blurred areas; dark gameplay clips look dull.
 
 ## Roadmap (approach B: use the clipper, add our layer step by step)

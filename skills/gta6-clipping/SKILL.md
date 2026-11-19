@@ -15,16 +15,16 @@ Pipeline: audio only -> Whisper transcript + loudness -> Claude picks moments ->
 
 ## Commands
 
-Run through the launcher: `bash ~/.claude/skills/gta6-clipping/scripts/gta6clip [URL ...] [flags]`
+`gta6clip` below means the launcher `~/.claude/skills/gta6-clipping/scripts/gta6clip`, run as `bash <launcher> [URL ...] [flags]`.
 
 | Goal | Command |
 |---|---|
 | One stream, 3 clips | `gta6clip <URL> --clips 3 --fast` |
 | Several streams | `gta6clip <URL1> <URL2> --clips 3 --fast` |
-| Part of a stream | `gta6clip <URL> --section 2:00:00-4:00:00` |
+| Part of a stream | `gta6clip <URL> --section 2:00:00-4:00:00` (A-B in seconds, m:ss or h:mm:ss) |
 | List streams found now | `gta6clip --find --list` |
 | Find and clip N streams | `gta6clip --find --streams 7 --clips 3 --fast` |
-| Age-restricted / Kick | add `--cookies chrome` |
+| Age-restricted / Kick | add `--cookies <browser>`, e.g. `--cookies chrome` |
 | Force a layout | `--layout {auto,stream,face,fit}` |
 | Redo from scratch | `--redo` (ignores saved stage files) |
 | Keep Mac work folder | `--keep-work` |
@@ -43,7 +43,7 @@ Run through the launcher: `bash ~/.claude/skills/gta6-clipping/scripts/gta6clip 
 
 ## Launch-day playbook
 
-1. Plug in the stick, run `gta6clip --find --list` and pick the biggest streams.
+1. Plug in the stick (before setup.sh on a fresh install), run `gta6clip --find --list` and pick the biggest streams.
 2. First pass on live streams: `gta6clip <URL> --clips 3 --fast`.
 3. Re-run live streams every 2-3 h. Saved state resumes where the last run stopped and re-reads a 90 s overlap, so no moment is cut at the boundary. Use `--redo` only if state is corrupt.
 4. After each run read `report_<HHMMSS>.json` and the `POST_<HHMMSS>.md`, then review (below).
@@ -55,6 +55,7 @@ Run through the launcher: `bash ~/.claude/skills/gta6-clipping/scripts/gta6clip 
 - [ ] Captions are readable and match what is said.
 - [ ] The right streamer is credited in the video and in POST.md.
 - [ ] No unresolved `⚠` flags in `POST_<HHMMSS>.md` or the report.
+- [ ] Clips flagged `non_english` (language unknown or not English) or `low_confidence` (unreliable transcription) show "⚠ needs review" in POST_<HHMMSS>.md: a human must check the captions or skip the clip.
 - [ ] Hook title is accurate, not misleading; caption and hashtags are sensible.
 
 Then the human posts. Claude does not.
@@ -63,9 +64,8 @@ Then the human posts. Claude does not.
 
 - A 12 h YouTube VOD's audio download is throttled to ~240 KiB/s, about 20 min.
 - A 10-minute section end to end takes ~11 min for one clip.
-- Non-English streams give weaker captions.
 
 ## Troubleshooting
 
-- `No such filter: 'ass'`: ffmpeg lacks libass; put `ffmpeg-full` first on PATH.
+- ffmpeg: `brew install ffmpeg-full`; the skill uses it automatically; the doctor run by setup.sh fails if the build lacks the `ass` filter.
 - Stick not mounted or too full: pre-flight stops before any work; fix and re-run.

@@ -1,6 +1,6 @@
 # gta6-clipping: token budget per run (short design)
 
-Status: draft, awaiting approval. Follows the Phase 1 branch (PR #1). Comes BEFORE turning the engine into a real installed skill.
+Status: approved by the user on 2026-11-20 ("prima testiamo questo e poi lo confrontiamo con quello di prima"). Follows the Phase 1 branch (PR #1). Comes BEFORE turning the engine into a real installed skill.
 
 ## Why
 
@@ -41,6 +41,14 @@ The returned JSON already contains `usage` and `total_cost_usd` for every call; 
   - look-style call: still Reads a JPEG inside the frames dir and is denied outside it.
   - the 10-minute section 7200-7800 re-run with `--redo`: same or comparable moment picked (score/hook), tokens logged.
 - Measurement: one full 12 h run on the Kai VOD (audio already cached is fine) with the user reading `/usage` before/after; result written into this doc.
+
+## Comparison with the previous version (user requirement)
+
+The user wants proof the new version is "right": same capability, lower cost.
+- New flag `--pick-only` (controller call): run listen → pick → look, write the selected moments to `<work>/compare_<HHMMSS>.json` plus the token totals, and stop: no clip download, no render, no archive, no state change, and it does NOT filter already-clipped moments (so it can be compared with the earlier run).
+- Run `--pick-only --clips 10` on the full Kai VOD and compare with the earlier run's 10 clips (03-12, from `clips_174816.json`) and 01-02: how many of the new top 10 match an earlier clip (overlap ≥ 50% of the shorter one), plus a side-by-side table of start time, score, event and hook. A small script `scripts/compare_picks.py` prints this table.
+- Token baseline for "before": the old code did not log usage, so before = measured new content tokens + (old per-call context − new per-call context) × number of calls, with both per-call figures measured live on the same day (this doc's table). The user's `/usage` reading on the new run gives the real % of the limit.
+- Pass criteria: ≥ 6 of 10 picks match the earlier run or are judged equal/better by the user on the side-by-side table; total tokens per 12 h run reduced by ≥ 70%; `/usage` delta ≤ 15%.
 
 ## Left to the builder
 

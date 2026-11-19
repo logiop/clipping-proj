@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import captions, config, fetch, layout, look, pick, render, ytdlp
+from . import captions, config, fetch, layout, look, pick, render, ytdlp, claude
 from .listen import audio, chat, loudness, transcript
 from .listen.transcript import Segment
 from .models import Moment, Stream
@@ -58,6 +58,18 @@ def read_notes(work: Path) -> dict:
 
 def add_notes(work: Path, **values) -> None:
     _write_json(work / NOTES, {**read_notes(work), **values})
+
+
+def _usage_notes(stage: str, u: "claude.Usage") -> dict:
+    return {f"tokens_{stage}": u.total_tokens, f"calls_{stage}": u.calls, f"cost_{stage}_usd": round(u.cost_usd, 4)}
+
+
+def token_summary(notes: dict) -> str:
+    """One line with the Claude tokens, calls and cost of this run (from notes.json)."""
+    tp, tl = notes.get("tokens_pick", 0), notes.get("tokens_look", 0)
+    calls = notes.get("calls_pick", 0) + notes.get("calls_look", 0)
+    cost = notes.get("cost_pick_usd", 0.0) + notes.get("cost_look_usd", 0.0)
+    return f"tokens: {tp + tl} (pick {tp}, look {tl}), calls {calls}, cost ≈ ${cost:.2f}"
 
 
 def moment_to_dict(m: Moment) -> dict:
@@ -137,8 +149,10 @@ def _moments_cache(path: Path, opts: Options, compute: Callable) -> List[Moment]
 
 def _pick(stream: Stream, work: Path, heard: Heard, opts: Options) -> List[Moment]:
     segments, spikes, bursts = heard
+    meter = claude.UsageMeter()
     result = pick.pick(stream, segments, spikes, bursts, n=2 * opts.clips, model=opts.model,
-                       parallel=opts.pick_parallel)
+                       parallel=opts.pick_parallel, meter=meter)
+    add_notes(work, **_usage_notes("pick", meter.total()))
     if result.total and result.failed == result.total:
         raise RuntimeError(f"all {result.total} Claude pick calls failed; nothing cached, run again later")
     add_notes(work, pick_failed_chunks=result.failed, pick_chunks=result.total)
@@ -159,7 +173,9 @@ def _look(stream: Stream, work: Path, candidates: List[Moment], opts: Options, p
             print(f"look: no frames for {m.start:.0f}-{m.end:.0f}, dropped ({exc})", file=sys.stderr)
     if not items:
         return []
-    result = look.check(items, opts.model, forbid=(p.work, work), parallel=opts.pick_parallel)
+    meter = claude.UsageMeter()
+    result = look.check(items, opts.model, forbid=(p.work, work), parallel=opts.pick_parallel, meter=meter)
+    add_notes(work, **_usage_notes("look", meter.total()))
     add_notes(work, look_failed_batches=result.failed, look_batches=result.total)
     best = sorted(result.kept, key=lambda m: m.score, reverse=True)[:opts.clips]
     return sorted(best, key=lambda m: m.start)

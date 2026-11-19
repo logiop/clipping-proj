@@ -131,3 +131,18 @@ def test_look_failing_batch_falls_back_alone(monkeypatch, capsys):
     assert [m.start for m in result.kept] == [0, 500, 600]
     assert (result.failed, result.total) == (1, 2)
     assert "visual check failed" in capsys.readouterr().err
+
+
+def test_look_feeds_meter():
+    from clipping import claude
+    items = [(moment(i * 100, i * 100 + 30), [Path(f"/w/frames/{i}/a.jpg")]) for i in range(7)]
+    seen = []
+
+    def ask(prompt, schema, model, tools="", add_dir=None, meter=None):
+        seen.append(meter)
+        meter.add(claude.Usage(input=50, calls=1))
+        return {"verdicts": []}
+
+    meter = claude.UsageMeter()
+    look.check(items, "sonnet", ask=ask, meter=meter)
+    assert len(seen) == 2 and all(m is meter for m in seen) and meter.total().input == 100

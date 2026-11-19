@@ -145,6 +145,7 @@ def _select(stream, work, section, opts, p, s, label) -> Tuple[List[Moment], dic
     found, t_pick = _timed(label, "pick", lambda: stages.pick_stage(stream, work, heard, opts))
     fresh = [m for m in found if not state.already_clipped(s, m)]
     chosen, t_look = _timed(label, "look", lambda: stages.look_stage(stream, work, fresh, opts, p))
+    print(f"[{label}] {stages.token_summary(stages.read_notes(work))}", flush=True)
     return chosen, {"listen": t_listen, "pick": t_pick, "look": t_look}
 
 

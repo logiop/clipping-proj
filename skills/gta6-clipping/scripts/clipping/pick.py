@@ -106,10 +106,10 @@ def select(moments: Sequence[Moment], n: int, min_gap: float = MIN_GAP_S) -> Lis
     return chosen
 
 
-def _pick_chunk(stream, chunk: Chunk, spikes, bursts, model, runner) -> Optional[List[Moment]]:
+def _pick_chunk(stream, chunk: Chunk, spikes, bursts, model, runner, meter=None) -> Optional[List[Moment]]:
     """Moments for one chunk; None (logged) when the call failed or crashed."""
     try:
-        return _pick_chunk_unsafe(stream, chunk, spikes, bursts, model, runner)
+        return _pick_chunk_unsafe(stream, chunk, spikes, bursts, model, runner, meter)
     except Exception as exc:  # one bad chunk must not abort the run
         label = f"{_timestamp(chunk[0])}-{_timestamp(chunk[1])}"
         detail = str(exc)[:CRASH_MESSAGE_CHARS]
@@ -117,10 +117,10 @@ def _pick_chunk(stream, chunk: Chunk, spikes, bursts, model, runner) -> Optional
         return None
 
 
-def _pick_chunk_unsafe(stream, chunk: Chunk, spikes, bursts, model, runner) -> Optional[List[Moment]]:
+def _pick_chunk_unsafe(stream, chunk: Chunk, spikes, bursts, model, runner, meter=None) -> Optional[List[Moment]]:
     start, end, segs = chunk
     prompt = build_prompt(stream, annotate(segs, spikes, bursts), start, end)
-    data = claude.ask(prompt, MOMENTS_SCHEMA, model, runner=runner)
+    data = claude.ask(prompt, MOMENTS_SCHEMA, model, runner=runner, meter=meter)
     label = f"{_timestamp(start)}-{_timestamp(end)}"
     if data is None:
         print(f"pick: chunk {label} failed, skipped", file=sys.stderr)
@@ -130,13 +130,13 @@ def _pick_chunk_unsafe(stream, chunk: Chunk, spikes, bursts, model, runner) -> O
 
 
 def pick(stream: Stream, segments, spikes, bursts, n: int, model: str,
-         parallel: int = 4, runner=subprocess.run) -> PickResult:
+         parallel: int = 4, runner=subprocess.run, meter: Optional[claude.UsageMeter] = None) -> PickResult:
     """Ask Claude per chunk (in parallel); the top-N non-overlapping moments and the failure count."""
     work = chunks(segments)
     if not work:
         return PickResult([], 0, 0)
     with ThreadPoolExecutor(max_workers=parallel) as pool:
-        results = list(pool.map(lambda c: _pick_chunk(stream, c, spikes, bursts, model, runner), work))
+        results = list(pool.map(lambda c: _pick_chunk(stream, c, spikes, bursts, model, runner, meter), work))
     found = [m for batch in results if batch is not None for m in batch]
     failed = sum(1 for batch in results if batch is None)
     return PickResult(select(found, n), failed, len(work))

@@ -178,3 +178,17 @@ def test_annotate_loud_ties_prefer_earlier_spikes():
     segs = [Segment(float(i), float(i) + 0.5, f"l{i}") for i in range(20)]
     lines = pick.annotate(segs, spikes=[(i, 5.0) for i in range(20)], bursts=[]).splitlines()
     assert [i for i, line in enumerate(lines) if "[LOUD" in line] == list(range(12))
+
+
+def test_pick_feeds_meter():
+    from clipping import claude
+    segs = [Segment(10, 14, "a"), Segment(800, 900, "b")]
+    usage = {"input_tokens": 100, "output_tokens": 10}
+
+    def payload(prompt):
+        return json.dumps({"is_error": False, "structured_output": {"moments": []}, "usage": usage,
+                           "total_cost_usd": 0.01})
+    meter = claude.UsageMeter()
+    pick.pick(STREAM, segs, [], [], n=3, model="sonnet", runner=runner_returning(payload), meter=meter)
+    total = meter.total()
+    assert total.calls == 2 and total.input == 200 and round(total.cost_usd, 4) == 0.02

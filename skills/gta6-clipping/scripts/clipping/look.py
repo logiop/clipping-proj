@@ -1,4 +1,5 @@
 """Visual check: is a candidate moment real gameplay (not menus, ads, BRB screens)?"""
+import functools
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -114,7 +115,8 @@ def _check_batch(items: Sequence[MomentFrames], model: str, ask: Callable) -> Tu
 
 
 def check(moments_with_frames: Sequence[MomentFrames], model: str, ask: Callable = claude.ask,
-          forbid: Tuple[Path, ...] = (), parallel: int = DEFAULT_PARALLEL) -> LookResult:
+          forbid: Tuple[Path, ...] = (), parallel: int = DEFAULT_PARALLEL,
+          meter: Optional[claude.UsageMeter] = None) -> LookResult:
     """Drop moments Claude judges non-gameplay; missing verdicts keep the moment.
 
     Moments go to Claude BATCH_SIZE at a time, `parallel` calls at once; a failed batch
@@ -129,7 +131,8 @@ def check(moments_with_frames: Sequence[MomentFrames], model: str, ask: Callable
         _check_forbid(_frames_dir(batch), forbid)
     if not batches:
         return LookResult([], 0, 0)
+    metered = ask if meter is None else functools.partial(ask, meter=meter)
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
-        results = list(pool.map(lambda b: _check_batch(b, model, ask), batches))
+        results = list(pool.map(lambda b: _check_batch(b, model, metered), batches))
     kept = [m for batch_kept, _ in results for m in batch_kept]
     return LookResult(kept, sum(1 for _, failed in results if failed), len(batches))

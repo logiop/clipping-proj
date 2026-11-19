@@ -58,7 +58,7 @@ def test_audio_file_is_per_section_so_a_reused_download_matches():
 def test_pick_stage_asks_for_twice_the_clips_and_caches(tmp_path, monkeypatch):
     seen = []
 
-    def fake_pick(stream, segments, spikes, bursts, n, model, parallel=4):
+    def fake_pick(stream, segments, spikes, bursts, n, model, parallel=4, meter=None):
         seen.append((n, model, parallel))
         return stages.pick.PickResult([_m(100, flags=("x",))], failed=1, total=3)
 
@@ -67,7 +67,8 @@ def test_pick_stage_asks_for_twice_the_clips_and_caches(tmp_path, monkeypatch):
     assert stages.pick_stage(STREAM, tmp_path, ([], [], []), opts) == [_m(100, flags=("x",))]
     assert stages.pick_stage(STREAM, tmp_path, ([], [], []), opts) == [_m(100, flags=("x",))]
     assert seen == [(6, "opus", 2)]
-    assert stages.read_notes(tmp_path) == {"pick_failed_chunks": 1, "pick_chunks": 3}
+    notes = stages.read_notes(tmp_path)
+    assert (notes["pick_failed_chunks"], notes["pick_chunks"]) == (1, 3)
 
 
 def test_pick_stage_raises_and_caches_nothing_when_every_chunk_failed(tmp_path, monkeypatch):
@@ -97,7 +98,7 @@ def test_look_stage_keeps_top_clips_sorted_by_start(tmp_path, monkeypatch):
     monkeypatch.setattr(stages.fetch, "moment_frames", frames)
     seen = {}
 
-    def check(items, model, forbid=(), parallel=4):
+    def check(items, model, forbid=(), parallel=4, **kw):
         seen["items"], seen["forbid"], seen["parallel"] = items, forbid, parallel
         return stages.look.LookResult([m for m, _ in items], failed=1, total=1)
 
@@ -107,7 +108,8 @@ def test_look_stage_keeps_top_clips_sorted_by_start(tmp_path, monkeypatch):
     assert kept == [_m(100, 80), _m(500, 90)]
     assert [m.start for m, _ in seen["items"]] == [500, 100, 300]
     assert seen["forbid"] == (p.work, work) and seen["parallel"] == 3
-    assert stages.read_notes(work) == {"look_failed_batches": 1, "look_batches": 1}
+    notes = stages.read_notes(work)
+    assert (notes["look_failed_batches"], notes["look_batches"]) == (1, 1)
     assert stages.look_stage(STREAM, work, cands, stages.Options(clips=2), p) == kept  # cached
 
 
@@ -129,7 +131,7 @@ def test_look_stage_frames_dir_passes_real_forbid_check(tmp_path, monkeypatch):
         return {"verdicts": []}
 
     real_check = stages.look.check
-    monkeypatch.setattr(stages.look, "check", lambda items, model, forbid=(), parallel=4: real_check(
+    monkeypatch.setattr(stages.look, "check", lambda items, model, forbid=(), parallel=4, **kw: real_check(
         items, model, ask=ask, forbid=forbid, parallel=parallel))
     assert stages.look_stage(STREAM, work, [_m(100), _m(500)], stages.Options(), p) == [_m(100), _m(500)]
     assert asked["dir"] == (work / "frames").resolve()
@@ -264,3 +266,17 @@ def test_notes_merge_and_default_empty(tmp_path):
     stages.add_notes(tmp_path, a=1)
     stages.add_notes(tmp_path, b=2, a=3)
     assert stages.read_notes(tmp_path) == {"a": 3, "b": 2}
+
+
+def test_stage_notes_include_tokens(tmp_path, monkeypatch):
+    from clipping import claude
+
+    def fake_pick(*a, meter=None, **k):
+        meter.add(claude.Usage(input=1000, output=50, cost_usd=0.5, calls=3))
+        return stages.pick.PickResult([], failed=0, total=3)
+    monkeypatch.setattr(stages.pick, "pick", fake_pick)
+    stages.pick_stage(STREAM, tmp_path, ([], [], []), stages.Options())
+    notes = stages.read_notes(tmp_path)
+    assert (notes["tokens_pick"], notes["calls_pick"], notes["cost_pick_usd"]) == (1050, 3, 0.5)
+    assert stages.token_summary({**notes, "tokens_look": 200, "calls_look": 1, "cost_look_usd": 0.25}) == \
+        "tokens: 1250 (pick 1050, look 200), calls 4, cost ≈ $0.75"

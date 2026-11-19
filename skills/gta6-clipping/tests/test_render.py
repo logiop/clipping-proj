@@ -1,6 +1,5 @@
 import json
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -48,7 +47,7 @@ def test_dark_adds_brightness_lift():
 
 
 def test_hook_bar_position_by_kind():
-    assert "drawbox=x=0:y=575" in graph(STREAM)
+    assert "drawbox=x=0:y=565" in graph(STREAM)
     assert "drawbox=x=0:y=300" in graph(FACE)
     assert "fontcolor=white@0.6" in graph(FIT)
 
@@ -115,7 +114,7 @@ def test_render_synthetic_clip(synthetic, tmp_path, plan):
     work.mkdir()
     ass = work / "captions.ass"
     ass.write_text(ASS)
-    out = tmp_path / f"{plan.kind}.mp4"
+    out = tmp_path / (plan.kind + ".mp4")
     result = render.render(synthetic, out, plan, ass, HOOK + " and a much longer tail of words", "@streamer", fast=False)
     assert result == out and out.exists()
     info = probe(out)
@@ -124,7 +123,7 @@ def test_render_synthetic_clip(synthetic, tmp_path, plan):
     assert any(s["codec_type"] == "audio" for s in info["streams"])
     assert abs(float(info["format"]["duration"]) - 3.0) < 0.5
     if plan.kind == "stream":
-        png = Path(tempfile.gettempdir()) / "gta6_render_stream_frame.png"
+        png = tmp_path / "stream_frame.png"
         subprocess.run([FF, "-y", "-v", "error", "-ss", "1", "-i", str(out), "-frames:v", "1", str(png)], check=True)
         assert png.exists()
         print("FRAME_PNG", png)
@@ -134,8 +133,9 @@ def test_render_synthetic_clip(synthetic, tmp_path, plan):
 def test_render_raises_with_stderr_tail(tmp_path):
     ass = tmp_path / "c.ass"
     ass.write_text(ASS)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError) as exc:
         render.render(tmp_path / "missing.mp4", tmp_path / "o.mp4", FIT, ass, "h", "@s", fast=True)
+    assert "missing.mp4" in str(exc.value)
 
 
 @pytest.mark.skipif(not has_ass(), reason="ffmpeg lacks ass/drawtext")
@@ -145,3 +145,46 @@ def test_mean_luma(synthetic, tmp_path):
                     str(dark)], check=True)
     assert render.mean_luma(dark) < 60
     assert render.mean_luma(synthetic) > 60
+
+
+def test_parse_yavg_from_fake_signalstats():
+    out = "frame:0 pts:0\nlavfi.signalstats.YAVG=10.5\nframe:1\nlavfi.signalstats.YAVG=20.5\n"
+    assert render.parse_yavg(out) == [10.5, 20.5]
+
+
+def fake_run(returncode, stdout, stderr=""):
+    def run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+    return run
+
+
+def test_mean_luma_averages_samples(monkeypatch):
+    monkeypatch.setattr(render, "_duration", lambda p: 10.0)
+    monkeypatch.setattr(render.subprocess, "run", fake_run(0, "YAVG=10\nYAVG=30\n"))
+    assert render.mean_luma(Path("x.mp4")) == 20.0
+
+
+def test_mean_luma_failure_warns_and_returns_not_dark(monkeypatch, capsys):
+    monkeypatch.setattr(render, "_duration", lambda p: 10.0)
+    monkeypatch.setattr(render.subprocess, "run", fake_run(1, "", "boom"))
+    assert render.mean_luma(Path("x.mp4")) == 128.0
+    err = capsys.readouterr().err
+    assert "warning" in err and "boom" in err and err.count("\n") == 1
+
+
+def test_mean_luma_no_samples_warns(monkeypatch, capsys):
+    monkeypatch.setattr(render, "_duration", lambda p: 0.0)
+    monkeypatch.setattr(render.subprocess, "run", fake_run(0, ""))
+    assert render.mean_luma(Path("x.mp4")) == 128.0
+    assert "warning" in capsys.readouterr().err
+
+
+def test_font_path_raises_when_none_exist(monkeypatch):
+    monkeypatch.setattr(render, "FONT_CANDIDATES", ("/nope/a.ttf", "/nope/b.ttf"))
+    with pytest.raises(FileNotFoundError, match="a.ttf"):
+        render.font_path()
+
+
+def test_text_files_named_after_ass_stem():
+    hook, credit = render.text_paths(Path("/w/clip1.ass"))
+    assert hook.name == "clip1.hook.txt" and credit.name == "clip1.credit.txt"

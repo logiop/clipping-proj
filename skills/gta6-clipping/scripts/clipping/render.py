@@ -1,6 +1,7 @@
 """Render: one ffmpeg command turns a 16:9 clip into the final 1080x1920 video."""
 import re
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 from typing import List
@@ -12,8 +13,8 @@ FONT_CANDIDATES = (
     "/System/Library/Fonts/Supplemental/Arial Black.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
 )
-HOOK_BAR_H = 130
-HOOK_BAR_ALPHA = 0.85
+HOOK_BAR_H = 150
+HOOK_BAR_ALPHA = 0.95
 HOOK_BAR_TOP_Y = 300
 HOOK_TEXT_WIDTH_PX = 1000
 HOOK_CHAR_WIDTH_EM = 0.65
@@ -25,6 +26,7 @@ DARK_LUMA = 60
 BRIGHTNESS_LIFT = 0.06
 FAST_VIDEO_BITRATE = "8M"
 LUMA_SAMPLE_FRAMES = 5
+NOT_DARK_LUMA = 128.0
 FILTER_SPECIALS = set("\\':,;[] ")
 STDERR_TAIL_CHARS = 1500
 
@@ -33,7 +35,7 @@ def font_path() -> str:
     for candidate in FONT_CANDIDATES:
         if Path(candidate).exists():
             return candidate
-    return FONT_CANDIDATES[-1]
+    raise FileNotFoundError(f"no hook font found; tried: {', '.join(FONT_CANDIDATES)}")
 
 
 def escape_filter_path(path) -> str:
@@ -66,7 +68,8 @@ def wrap_hook(hook: str):
 
 
 def text_paths(ass_path: Path):
-    return ass_path.with_name("hook.txt"), ass_path.with_name("credit.txt")
+    return (ass_path.with_name(f"{ass_path.stem}.hook.txt"),
+            ass_path.with_name(f"{ass_path.stem}.credit.txt"))
 
 
 def _layout_chain(plan: LayoutPlan) -> str:
@@ -129,15 +132,38 @@ def command(src: Path, out: Path, graph: str, fast: bool) -> List[str]:
     ]
 
 
+def _duration(src: Path) -> float:
+    """Clip duration in seconds via ffprobe; 0.0 when unknown."""
+    probe = Path(config.ffmpeg_bin()).with_name("ffprobe")
+    cmd = [str(probe) if probe.exists() else "ffprobe", "-v", "error",
+           "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(src)]
+    try:
+        return float(subprocess.run(cmd, capture_output=True, text=True).stdout.strip())
+    except (ValueError, OSError):
+        return 0.0
+
+
+def parse_yavg(output: str) -> List[float]:
+    return [float(v) for v in re.findall(r"YAVG=([0-9.]+)", output)]
+
+
 def mean_luma(src: Path) -> float:
-    """Mean luma (0-255) over a few sampled frames. Integration-only."""
+    """Mean luma (0-255) over ~LUMA_SAMPLE_FRAMES frames spread across the clip.
+
+    Integration-only. On ffmpeg failure or no samples it prints one warning to stderr
+    and returns NOT_DARK_LUMA (128.0), i.e. the clip is treated as not dark.
+    """
+    duration = _duration(src)
+    rate = LUMA_SAMPLE_FRAMES / duration if duration > 0 else 1.0
     cmd = [config.ffmpeg_bin(), "-v", "error", "-i", str(src), "-vf",
-           f"fps=1,scale=320:-2,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+           f"fps={rate:.6f},scale=320:-2,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
            "-frames:v", str(LUMA_SAMPLE_FRAMES), "-an", "-f", "null", "-"]
     proc = subprocess.run(cmd, capture_output=True, text=True)
-    values = [float(v) for v in re.findall(r"YAVG=([0-9.]+)", proc.stdout)]
-    if not values:
-        return 128.0
+    values = parse_yavg(proc.stdout)
+    if proc.returncode != 0 or not values:
+        tail = proc.stderr.strip()[-200:]
+        print(f"warning: luma measurement failed for {src}, assuming not dark: {tail}", file=sys.stderr)
+        return NOT_DARK_LUMA
     return sum(values) / len(values)
 
 

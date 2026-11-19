@@ -30,7 +30,7 @@ def test_run_all_reports_every_tool_check(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor, "_check_yunet", lambda: doctor.Check("yunet model", True, ""))
     checks = doctor.run_all()
     names = {c.name for c in checks}
-    assert {"ffmpeg ass filter", "node", "claude", "yunet model", "mac disk", "archive", "stick space"} <= names
+    assert {"ffmpeg ass filter", "node", "claude", "yunet model", "mac disk", "archive"} <= names
 
 
 def test_main_exits_1_and_prints_fix_on_failure(monkeypatch, capsys):

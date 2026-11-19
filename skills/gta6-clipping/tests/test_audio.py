@@ -35,3 +35,24 @@ def test_download_failure_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(audio.subprocess, "run", lambda cmd, **kw: Proc(1))
     with pytest.raises(RuntimeError):
         audio.download(STREAM, None, tmp_path / "a.m4a")
+
+
+def test_download_continues_partial_instead_of_overwriting(monkeypatch, tmp_path):
+    dest = tmp_path / "a.m4a"
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        dest.write_bytes(b"x")
+        return Proc()
+
+    monkeypatch.setattr(audio.subprocess, "run", fake_run)
+    audio.download(STREAM, None, dest)
+    assert "--continue" in calls[0] and "--force-overwrites" not in calls[0]
+
+
+def test_download_reuses_a_complete_file(monkeypatch, tmp_path):
+    dest = tmp_path / "a.m4a"
+    dest.write_bytes(b"done")
+    monkeypatch.setattr(audio.subprocess, "run", lambda *a, **k: pytest.fail("must not download again"))
+    assert audio.download(STREAM, None, dest) == dest

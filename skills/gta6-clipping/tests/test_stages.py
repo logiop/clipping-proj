@@ -25,6 +25,7 @@ def _m(start, score=50, flags=()):
 def _fake_listen(monkeypatch, calls):
     def download(stream, section, dest, cookies=None):
         calls.append(("download", section, cookies))
+        calls.append(("dest", dest.name))
         dest.write_bytes(b"a")
         return dest
 
@@ -42,11 +43,16 @@ def test_listen_stage_shifts_spikes_and_caches(tmp_path, monkeypatch):
     opts = stages.Options(cookies="chrome")
     heard = stages.listen_stage(STREAM, tmp_path, (3600.0, 4200.0), opts)
     assert heard == ([Segment(3601.0, 3603.0, "wow")], [(3603.0, 9.0)], [(3605, 4.0)])
-    assert calls == [("download", (3600.0, 4200.0), "chrome")]
+    assert calls == [("download", (3600.0, 4200.0), "chrome"), ("dest", "audio_3600.00-4200.00.m4a")]
     assert stages.listen_stage(STREAM, tmp_path, (3600.0, 4200.0), opts) == heard
-    assert len(calls) == 1  # second run reads listen.json
+    assert len(calls) == 2  # second run reads listen.json
     stages.listen_stage(STREAM, tmp_path, (3600.0, 4200.0), stages.Options(redo=True))
-    assert len(calls) == 2
+    assert len(calls) == 4
+
+
+def test_audio_file_is_per_section_so_a_reused_download_matches():
+    assert stages.audio_path(Path("/w"), None) == Path("/w/audio.m4a")
+    assert stages.audio_path(Path("/w"), (10.0, 70.5)) == Path("/w/audio_10.00-70.50.m4a")
 
 
 def test_pick_stage_asks_for_twice_the_clips_and_caches(tmp_path, monkeypatch):
@@ -54,13 +60,26 @@ def test_pick_stage_asks_for_twice_the_clips_and_caches(tmp_path, monkeypatch):
 
     def fake_pick(stream, segments, spikes, bursts, n, model, parallel=4):
         seen.append((n, model, parallel))
-        return [_m(100, flags=("x",))]
+        return stages.pick.PickResult([_m(100, flags=("x",))], failed=1, total=3)
 
     monkeypatch.setattr(stages.pick, "pick", fake_pick)
     opts = stages.Options(clips=3, model="opus", pick_parallel=2)
     assert stages.pick_stage(STREAM, tmp_path, ([], [], []), opts) == [_m(100, flags=("x",))]
     assert stages.pick_stage(STREAM, tmp_path, ([], [], []), opts) == [_m(100, flags=("x",))]
     assert seen == [(6, "opus", 2)]
+    assert stages.read_notes(tmp_path) == {"pick_failed_chunks": 1, "pick_chunks": 3}
+
+
+def test_pick_stage_raises_and_caches_nothing_when_every_chunk_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages.pick, "pick", lambda *a, **k: stages.pick.PickResult([], failed=4, total=4))
+    with pytest.raises(RuntimeError, match="all 4"):
+        stages.pick_stage(STREAM, tmp_path, ([], [], []), stages.Options())
+    assert not (tmp_path / "moments.json").exists()
+
+
+def test_pick_stage_without_chunks_is_not_a_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages.pick, "pick", lambda *a, **k: stages.pick.PickResult([], failed=0, total=0))
+    assert stages.pick_stage(STREAM, tmp_path, ([], [], []), stages.Options()) == []
 
 
 def test_look_stage_keeps_top_clips_sorted_by_start(tmp_path, monkeypatch):
@@ -78,16 +97,17 @@ def test_look_stage_keeps_top_clips_sorted_by_start(tmp_path, monkeypatch):
     monkeypatch.setattr(stages.fetch, "moment_frames", frames)
     seen = {}
 
-    def check(items, model, forbid=()):
-        seen["items"], seen["forbid"] = items, forbid
-        return [m for m, _ in items]
+    def check(items, model, forbid=(), parallel=4):
+        seen["items"], seen["forbid"], seen["parallel"] = items, forbid, parallel
+        return stages.look.LookResult([m for m, _ in items], failed=1, total=1)
 
     monkeypatch.setattr(stages.look, "check", check)
     cands = [_m(500, 90), _m(100, 80), _m(300, 10), _m(900, 99)]
-    kept = stages.look_stage(STREAM, work, cands, stages.Options(clips=2), p)
+    kept = stages.look_stage(STREAM, work, cands, stages.Options(clips=2, pick_parallel=3), p)
     assert kept == [_m(100, 80), _m(500, 90)]
     assert [m.start for m, _ in seen["items"]] == [500, 100, 300]
-    assert seen["forbid"] == (p.work, work)
+    assert seen["forbid"] == (p.work, work) and seen["parallel"] == 3
+    assert stages.read_notes(work) == {"look_failed_batches": 1, "look_batches": 1}
     assert stages.look_stage(STREAM, work, cands, stages.Options(clips=2), p) == kept  # cached
 
 
@@ -109,8 +129,8 @@ def test_look_stage_frames_dir_passes_real_forbid_check(tmp_path, monkeypatch):
         return {"verdicts": []}
 
     real_check = stages.look.check
-    monkeypatch.setattr(stages.look, "check", lambda items, model, forbid=(): real_check(items, model, ask=ask,
-                                                                                          forbid=forbid))
+    monkeypatch.setattr(stages.look, "check", lambda items, model, forbid=(), parallel=4: real_check(
+        items, model, ask=ask, forbid=forbid, parallel=parallel))
     assert stages.look_stage(STREAM, work, [_m(100), _m(500)], stages.Options(), p) == [_m(100), _m(500)]
     assert asked["dir"] == (work / "frames").resolve()
 
@@ -237,3 +257,10 @@ def test_cached_section_differs(tmp_path, monkeypatch):
     assert not stages.cached_section_differs(tmp_path, (3600.0, 4200.0))
     assert stages.cached_section_differs(tmp_path, (4110.0, 5000.0))
     assert stages.cached_section_differs(tmp_path, None)
+
+
+def test_notes_merge_and_default_empty(tmp_path):
+    assert stages.read_notes(tmp_path) == {}
+    stages.add_notes(tmp_path, a=1)
+    stages.add_notes(tmp_path, b=2, a=3)
+    assert stages.read_notes(tmp_path) == {"a": 3, "b": 2}

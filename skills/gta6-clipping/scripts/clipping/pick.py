@@ -3,8 +3,9 @@ import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from . import claude
 from .listen.transcript import Segment
@@ -17,8 +18,16 @@ _DATA_TAG = re.compile(r"<(/?stream_data)", re.IGNORECASE)
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 MIN_GAP_S = 60
 MAX_LOUD_MARKS_PER_CHUNK = 12  # spikes are detected with a low z; only the loudest are worth a mark
+CRASH_MESSAGE_CHARS = 200
 
 Chunk = Tuple[float, float, List[Segment]]
+
+
+@dataclass(frozen=True)
+class PickResult:
+    moments: List[Moment]
+    failed: int  # chunks whose Claude call failed or crashed
+    total: int   # chunks asked
 
 
 def chunks(segments: Sequence[Segment], minutes: int = 12) -> List[Chunk]:
@@ -37,8 +46,8 @@ def chunks(segments: Sequence[Segment], minutes: int = 12) -> List[Chunk]:
 
 
 def _timestamp(seconds: float) -> str:
-    total = int(seconds)
-    return f"{total // 60:02d}:{total % 60:02d}"
+    """Absolute stream seconds, the unit Claude must answer in: `[42930s]`."""
+    return f"{int(seconds)}s"
 
 
 def _loudest(chunk_segments: Sequence[Segment], spikes, limit: int = MAX_LOUD_MARKS_PER_CHUNK):
@@ -52,7 +61,7 @@ def _loudest(chunk_segments: Sequence[Segment], spikes, limit: int = MAX_LOUD_MA
 
 
 def annotate(chunk_segments: Sequence[Segment], spikes, bursts) -> str:
-    """One line per segment: `[mm:ss] text [LOUD +NdB] [CHAT xN]`.
+    """One line per segment: `[Ns] text [LOUD +NdB] [CHAT xN]` (N = absolute stream seconds).
 
     Only the MAX_LOUD_MARKS_PER_CHUNK loudest spikes of the chunk are marked.
     """
@@ -97,35 +106,37 @@ def select(moments: Sequence[Moment], n: int, min_gap: float = MIN_GAP_S) -> Lis
     return chosen
 
 
-def _pick_chunk(stream, chunk: Chunk, spikes, bursts, model, runner) -> List[Moment]:
-    """Moments for one chunk; any unexpected error is logged and yields []."""
+def _pick_chunk(stream, chunk: Chunk, spikes, bursts, model, runner) -> Optional[List[Moment]]:
+    """Moments for one chunk; None (logged) when the call failed or crashed."""
     try:
         return _pick_chunk_unsafe(stream, chunk, spikes, bursts, model, runner)
     except Exception as exc:  # one bad chunk must not abort the run
         label = f"{_timestamp(chunk[0])}-{_timestamp(chunk[1])}"
-        print(f"pick: chunk {label} crashed ({type(exc).__name__}), skipped", file=sys.stderr)
-        return []
+        detail = str(exc)[:CRASH_MESSAGE_CHARS]
+        print(f"pick: chunk {label} crashed ({type(exc).__name__}: {detail}), skipped", file=sys.stderr)
+        return None
 
 
-def _pick_chunk_unsafe(stream, chunk: Chunk, spikes, bursts, model, runner) -> List[Moment]:
+def _pick_chunk_unsafe(stream, chunk: Chunk, spikes, bursts, model, runner) -> Optional[List[Moment]]:
     start, end, segs = chunk
     prompt = build_prompt(stream, annotate(segs, spikes, bursts), start, end)
     data = claude.ask(prompt, MOMENTS_SCHEMA, model, runner=runner)
     label = f"{_timestamp(start)}-{_timestamp(end)}"
     if data is None:
         print(f"pick: chunk {label} failed, skipped", file=sys.stderr)
-        return []
+        return None
     moments = [moment_from_dict(d, start, end) for d in data.get("moments", [])]
     return [m for m in moments if m is not None]
 
 
 def pick(stream: Stream, segments, spikes, bursts, n: int, model: str,
-         parallel: int = 4, runner=subprocess.run) -> List[Moment]:
-    """Ask Claude per chunk (in parallel) and return the top-N non-overlapping moments."""
+         parallel: int = 4, runner=subprocess.run) -> PickResult:
+    """Ask Claude per chunk (in parallel); the top-N non-overlapping moments and the failure count."""
     work = chunks(segments)
     if not work:
-        return []
+        return PickResult([], 0, 0)
     with ThreadPoolExecutor(max_workers=parallel) as pool:
-        results = pool.map(lambda c: _pick_chunk(stream, c, spikes, bursts, model, runner), work)
-        found = [m for batch in results for m in batch]
-    return select(found, n)
+        results = list(pool.map(lambda c: _pick_chunk(stream, c, spikes, bursts, model, runner), work))
+    found = [m for batch in results if batch is not None for m in batch]
+    failed = sum(1 for batch in results if batch is None)
+    return PickResult(select(found, n), failed, len(work))

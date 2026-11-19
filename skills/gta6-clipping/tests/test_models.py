@@ -114,3 +114,9 @@ def test_look_schema_validates():
     jsonschema.validate({"verdicts": [{"index": 0, "gameplay": True, "why": "x"}]}, schemas.LOOK_SCHEMA)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"verdicts": [{"index": 0}]}, schemas.LOOK_SCHEMA)
+
+
+@pytest.mark.parametrize("over", [{"end": float("inf")}, {"end": float("nan")}, {"start": float("nan")},
+                                  {"start": float("-inf")}, {"score": float("inf")}, {"score": float("nan")}])
+def test_non_finite_numbers_are_none(over):
+    assert models.moment_from_dict(make_dict(**over), 0, 600) is None

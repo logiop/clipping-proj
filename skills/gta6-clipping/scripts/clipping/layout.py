@@ -1,5 +1,6 @@
 """Layout: find the streamer's facecam and plan the 1080x1920 vertical arrangement."""
 import statistics
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import List, Optional, Sequence
@@ -18,6 +19,7 @@ FACE_ASPECT = OUT_W / OUT_H
 
 YUNET_MODEL = "face_detection_yunet_2023mar.onnx"
 FACE_SCORE_THRESHOLD = 0.8
+_DETECTOR_LOCK = threading.Lock()  # cached detectors are shared by the stream threads
 MIN_PRESENCE = 0.60          # fraction of sampled frames that must contain the face
 STABLE_FRACTION = 0.05       # max center drift from the median, as a fraction of frame width
 EDGE_BAND_X = 0.35           # outer share of the width (left or right) where a cam may sit
@@ -79,9 +81,10 @@ def _detector(width: int, height: int):
 def detect_faces(frame: np.ndarray) -> List[Box]:
     """Faces found by YuNet (score >= 0.8) in a BGR frame."""
     height, width = frame.shape[:2]
-    detector = _detector(width, height)
-    detector.setInputSize((width, height))
-    _, found = detector.detect(frame)
+    with _DETECTOR_LOCK:
+        detector = _detector(width, height)
+        detector.setInputSize((width, height))
+        _, found = detector.detect(frame)
     if found is None:
         return []
     return [Box(int(r[0]), int(r[1]), int(r[2]), int(r[3])) for r in found]

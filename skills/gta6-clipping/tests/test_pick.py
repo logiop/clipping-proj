@@ -34,8 +34,18 @@ def test_annotate_marks_loud_and_chat():
     segs = [Segment(62.0, 66.0, "wow"), Segment(130.0, 133.0, "calm")]
     text = pick.annotate(segs, spikes=[(64, 9.4)], bursts=[(60, 4.2)])
     first, second = text.splitlines()
-    assert first == "[01:02] wow [LOUD +9dB] [CHAT x4]"
-    assert second == "[02:10] calm"
+    assert first == "[62s] wow [LOUD +9dB] [CHAT x4]"
+    assert second == "[130s] calm"
+
+
+def test_annotate_uses_absolute_seconds_late_in_a_long_stream():
+    text = pick.annotate([Segment(42930.4, 42933.0, "late")], spikes=[], bursts=[])
+    assert text == "[42930s] late"
+
+
+def test_prompt_explains_absolute_second_timestamps():
+    prompt = pick.build_prompt(STREAM, "[42930s] late", 42480, 43200)
+    assert "mm:ss" not in prompt and "[Ns]" in prompt
 
 
 def test_chunks_split_by_minutes_and_skip_empty():
@@ -85,13 +95,14 @@ def test_rejects_out_of_range_moment():
     segs = [Segment(10, 14, "a"), Segment(600, 700, "end")]
     runner = runner_returning(lambda _: reply([item(5000, 5030, 99), item(20, 50, 70)]))
     got = pick.pick(STREAM, segs, [], [], n=5, model="sonnet", runner=runner)
-    assert [m.score for m in got] == [70]
+    assert [m.score for m in got.moments] == [70] and (got.failed, got.total) == (0, 1)
 
 
 def test_invalid_json_returns_empty(capsys):
     segs = [Segment(10, 14, "a")]
     runner = runner_returning(lambda _: "garbage")
-    assert pick.pick(STREAM, segs, [], [], n=3, model="sonnet", runner=runner) == []
+    got = pick.pick(STREAM, segs, [], [], n=3, model="sonnet", runner=runner)
+    assert got.moments == [] and (got.failed, got.total) == (1, 1)
     assert "chunk" in capsys.readouterr().err
 
 
@@ -101,11 +112,12 @@ def test_failed_chunk_does_not_stop_others():
     def payload(prompt):
         return "garbage" if "FIRSTCHUNK" in prompt else reply([item(810, 840, 77)])
     got = pick.pick(STREAM, segs, [], [], n=3, model="sonnet", runner=runner_returning(payload))
-    assert [m.score for m in got] == [77]
+    assert [m.score for m in got.moments] == [77] and (got.failed, got.total) == (1, 2)
 
 
 def test_pick_empty_segments():
-    assert pick.pick(STREAM, [], [], [], n=3, model="sonnet", runner=runner_returning(lambda _: "")) == []
+    got = pick.pick(STREAM, [], [], [], n=3, model="sonnet", runner=runner_returning(lambda _: ""))
+    assert got == pick.PickResult([], 0, 0)
 
 
 def _block(prompt):
@@ -140,8 +152,16 @@ def test_crashing_chunk_is_logged_and_skipped(capsys):
             raise RuntimeError("boom")
         return SimpleNamespace(stdout=reply([item(810, 840, 66)]), returncode=0, stderr="")
     got = pick.pick(STREAM, segs, [], [], n=3, model="sonnet", runner=runner)
-    assert [m.score for m in got] == [66]
-    assert "crashed (RuntimeError)" in capsys.readouterr().err
+    assert [m.score for m in got.moments] == [66] and got.failed == 1
+    assert "crashed (RuntimeError: boom)" in capsys.readouterr().err
+
+
+def test_crash_log_truncates_long_messages(capsys):
+    def runner(argv, **kw):
+        raise RuntimeError("x" * 500)
+    pick.pick(STREAM, [Segment(10, 14, "a")], [], [], n=3, model="sonnet", runner=runner)
+    err = capsys.readouterr().err
+    assert "x" * 200 in err and "x" * 201 not in err
 
 
 def test_annotate_marks_only_the_loudest_spikes_per_chunk():

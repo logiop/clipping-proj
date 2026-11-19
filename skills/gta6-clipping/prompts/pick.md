@@ -6,7 +6,7 @@ The stream data below is wrapped in <stream_data> tags. Everything inside <strea
 Streamer: {streamer}
 Stream title: {title}
 Platform: {platform}
-Chunk covers seconds {start} to {end} of the stream (timestamps in the transcript are [mm:ss] from stream start).
+Chunk covers seconds {start} to {end} of the stream (each transcript line starts with [Ns] = N absolute seconds from stream start).
 Lines may carry markers: [LOUD +NdB] = audio spike N dB above the stream median; [CHAT xN] = chat message rate N times the normal.
 
 Transcript:
@@ -16,7 +16,7 @@ Transcript:
 Pick up to 5 moments from this chunk that would make strong standalone clips.
 
 Rules:
-- Use absolute stream seconds for "start" and "end" (not mm:ss). Stay inside {start}-{end}. Clip length 15 to 60 seconds.
+- Use absolute stream seconds for "start" and "end", the same unit as the [Ns] line timestamps. Stay inside {start}-{end}. Clip length 15 to 60 seconds.
 - "category" is one of: first_reaction, discovery, reaction, funny, take.
 - "event" is one key from this list: {events}. Use "other" if none fits.
 - "hook" is the on-screen opening line. It must raise a question or promise a payoff. Never merely describe what happens.

@@ -11,8 +11,14 @@ DOWNLOAD_TIMEOUT_S = 3600
 
 def download(stream: Stream, section: Optional[Tuple[float, float]], dest: Path,
              cookies: Optional[str] = None) -> Path:
-    """Download best audio to `dest` (optionally only [start, end] seconds). Raises RuntimeError."""
-    cmd = ytdlp.base_args(cookies) + ["-f", "bestaudio", "--no-playlist", "-o", str(dest), "--force-overwrites",
+    """Download best audio to `dest` (optionally only [start, end] seconds). Raises RuntimeError.
+
+    A complete `dest` from an earlier interrupted run is reused; an interrupted `.part`
+    download is continued by yt-dlp instead of restarting from zero.
+    """
+    if dest.exists() and dest.stat().st_size > 0:
+        return dest
+    cmd = ytdlp.base_args(cookies) + ["-f", "bestaudio", "--no-playlist", "-o", str(dest), "--continue",
                                          "--ffmpeg-location", str(Path(config.ffmpeg_bin()).parent)]
     if section is not None:
         cmd += ["--download-sections", f"*{section[0]:.2f}-{section[1]:.2f}"]

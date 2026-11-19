@@ -1,5 +1,6 @@
 """Shared data types and (de)serialization for work-folder stage files."""
 import json
+import math
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from typing import Optional, Type, TypeVar
 
@@ -36,7 +37,8 @@ class Moment:
 
 
 def _is_number(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """A finite int or float (not a bool, not nan or inf)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _is_str_list(v) -> bool:

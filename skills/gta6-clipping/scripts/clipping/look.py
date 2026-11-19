@@ -1,7 +1,8 @@
 """Visual check: is a candidate moment real gameplay (not menus, ads, BRB screens)?"""
 import os
 import sys
-from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
@@ -13,9 +14,18 @@ DEFAULT_FRAME_COUNT = 4
 STATIC_DIFF_THRESHOLD = 2.0   # mean abs pixel diff (0-255) below which two frames count as identical
 STATIC_DROP_SCORE = 0.98      # fallback: drop a moment whose frames are this static
 NOT_GAMEPLAY_FLAG = "not_gameplay"
+BATCH_SIZE = 5                # moments per Claude call (a few frames each)
+DEFAULT_PARALLEL = 4
 PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "look.md"
 
 MomentFrames = Tuple[Moment, List[Path]]
+
+
+@dataclass(frozen=True)
+class LookResult:
+    kept: List[Moment]
+    failed: int  # batches whose Claude call failed (static-screen fallback used)
+    total: int   # batches asked
 
 
 def frame_times(m: Moment, k: int = DEFAULT_FRAME_COUNT) -> List[float]:
@@ -71,27 +81,14 @@ def _fallback(items: Sequence[MomentFrames]) -> List[Moment]:
     return kept
 
 
-def check(moments_with_frames: Sequence[MomentFrames], model: str,
-          ask: Callable = claude.ask, forbid: Tuple[Path, ...] = ()) -> List[Moment]:
-    """Drop moments Claude judges non-gameplay; missing verdicts keep the moment.
-
-    Claude gets read access to the frames directory, so callers keep frames in a dedicated
-    `frames/` subfolder and pass the work root (and anything else sensitive) in `forbid`;
-    ValueError is raised if the frames directory equals or contains a forbidden path.
-    """
-    items = list(moments_with_frames)
-    if not items:
-        return []
-    frames_dir = _frames_dir(items)
+def _check_forbid(frames_dir: Path, forbid: Tuple[Path, ...]) -> None:
     for path in forbid:
         resolved = path.resolve()
         if resolved == frames_dir or frames_dir in resolved.parents:
             raise ValueError(f"frames directory {frames_dir} would expose {resolved}; use a dedicated frames/ folder")
-    prompt = PROMPT_PATH.read_text(encoding="utf-8").replace("{listing}", _listing(items))
-    reply: Optional[dict] = ask(prompt, LOOK_SCHEMA, model, tools="Read", add_dir=frames_dir)
-    if reply is None:
-        print("look: Claude visual check failed, using static-screen fallback", file=sys.stderr)
-        return _fallback(items)
+
+
+def _apply_verdicts(items: Sequence[MomentFrames], reply: dict) -> List[Moment]:
     rejected = {v["index"]: v["why"] for v in reply["verdicts"] if not v["gameplay"]}
     kept = []
     for index, (m, _) in enumerate(items):
@@ -102,3 +99,37 @@ def check(moments_with_frames: Sequence[MomentFrames], model: str,
             continue
         kept.append(m)
     return kept
+
+
+def _check_batch(items: Sequence[MomentFrames], model: str, ask: Callable) -> Tuple[List[Moment], bool]:
+    """(kept moments, whether the Claude call failed) for one batch."""
+    prompt = PROMPT_PATH.read_text(encoding="utf-8").replace("{listing}", _listing(items))
+    reply: Optional[dict] = ask(prompt, LOOK_SCHEMA, model, tools="Read", add_dir=_frames_dir(items))
+    if reply is None:
+        span = f"{items[0][0].start:.0f}s-{items[-1][0].end:.0f}s"
+        print(f"look: WARNING Claude visual check failed for {len(items)} moments ({span}), "
+              "using static-screen fallback", file=sys.stderr)
+        return _fallback(items), True
+    return _apply_verdicts(items, reply), False
+
+
+def check(moments_with_frames: Sequence[MomentFrames], model: str, ask: Callable = claude.ask,
+          forbid: Tuple[Path, ...] = (), parallel: int = DEFAULT_PARALLEL) -> LookResult:
+    """Drop moments Claude judges non-gameplay; missing verdicts keep the moment.
+
+    Moments go to Claude BATCH_SIZE at a time, `parallel` calls at once; a failed batch
+    falls back to the static-screen check on its own. Claude gets read access to each
+    batch's frames directory, so callers keep frames in a dedicated `frames/` subfolder and
+    pass the work root (and anything else sensitive) in `forbid`; ValueError is raised if a
+    frames directory equals or contains a forbidden path.
+    """
+    items = list(moments_with_frames)
+    batches = [items[i:i + BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
+    for batch in batches:
+        _check_forbid(_frames_dir(batch), forbid)
+    if not batches:
+        return LookResult([], 0, 0)
+    with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
+        results = list(pool.map(lambda b: _check_batch(b, model, ask), batches))
+    kept = [m for batch_kept, _ in results for m in batch_kept]
+    return LookResult(kept, sum(1 for _, failed in results if failed), len(batches))

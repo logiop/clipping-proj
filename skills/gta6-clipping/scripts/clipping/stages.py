@@ -1,6 +1,6 @@
 """Per-stream stages, all inside the Mac work folder. Each stage with a JSON output
 (listen.json, moments.json, selected.json, clips/NN.json) is skipped when that file
-exists, unless Options.redo is set."""
+exists, unless Options.redo is set. Failure counts for the run report go to notes.json."""
 import json
 import os
 import subprocess
@@ -18,6 +18,7 @@ from .models import Moment, Stream
 LAYOUT_SAMPLES = 8
 CHAT_TIMEOUT_S = 600
 WAV_TIMEOUT_S = 300
+NOTES = "notes.json"
 Section = Optional[Tuple[float, float]]
 Heard = Tuple[list, list, list]  # (segments, spikes, bursts), all in stream time
 
@@ -47,6 +48,16 @@ def _cached(path: Path, redo: bool, compute: Callable, encode: Callable, decode:
     value = compute()
     _write_json(path, encode(value))
     return value
+
+
+def read_notes(work: Path) -> dict:
+    """Failure counts recorded by the stages of this work folder ({} when none)."""
+    path = work / NOTES
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def add_notes(work: Path, **values) -> None:
+    _write_json(work / NOTES, {**read_notes(work), **values})
 
 
 def moment_to_dict(m: Moment) -> dict:
@@ -81,8 +92,16 @@ def chat_bursts(stream: Stream, work: Path, section: Section, cookies: Optional[
     return chat.bursts(chat.rate(offsets))
 
 
+def audio_path(work: Path, section: Section) -> Path:
+    """The stream audio file; named per section, so an audio file left by an earlier run is
+    only reused for the same section."""
+    if section is None:
+        return work / "audio.m4a"
+    return work / f"audio_{section[0]:.2f}-{section[1]:.2f}.m4a"
+
+
 def _listen(stream: Stream, work: Path, section: Section, opts: Options) -> Heard:
-    track = audio.download(stream, section, work / "audio.m4a", opts.cookies)
+    track = audio.download(stream, section, audio_path(work, section), opts.cookies)
     offset = section[0] if section is not None else 0.0
     spikes = [(sec + offset, db) for sec, db in loudness.spikes(loudness.measure(track))]
     segments = transcript.get(stream, track, opts.cookies, section=section)
@@ -116,10 +135,19 @@ def _moments_cache(path: Path, opts: Options, compute: Callable) -> List[Moment]
                    lambda d: [moment_from_dict(x) for x in d])
 
 
-def pick_stage(stream: Stream, work: Path, heard: Heard, opts: Options) -> List[Moment]:
+def _pick(stream: Stream, work: Path, heard: Heard, opts: Options) -> List[Moment]:
     segments, spikes, bursts = heard
-    return _moments_cache(work / "moments.json", opts, lambda: pick.pick(
-        stream, segments, spikes, bursts, n=2 * opts.clips, model=opts.model, parallel=opts.pick_parallel))
+    result = pick.pick(stream, segments, spikes, bursts, n=2 * opts.clips, model=opts.model,
+                       parallel=opts.pick_parallel)
+    if result.total and result.failed == result.total:
+        raise RuntimeError(f"all {result.total} Claude pick calls failed; nothing cached, run again later")
+    add_notes(work, pick_failed_chunks=result.failed, pick_chunks=result.total)
+    return result.moments
+
+
+def pick_stage(stream: Stream, work: Path, heard: Heard, opts: Options) -> List[Moment]:
+    """Candidate moments; RuntimeError (and no moments.json) when every Claude call failed."""
+    return _moments_cache(work / "moments.json", opts, lambda: _pick(stream, work, heard, opts))
 
 
 def _look(stream: Stream, work: Path, candidates: List[Moment], opts: Options, p: config.Paths) -> List[Moment]:
@@ -131,8 +159,9 @@ def _look(stream: Stream, work: Path, candidates: List[Moment], opts: Options, p
             print(f"look: no frames for {m.start:.0f}-{m.end:.0f}, dropped ({exc})", file=sys.stderr)
     if not items:
         return []
-    kept = look.check(items, opts.model, forbid=(p.work, work))
-    best = sorted(kept, key=lambda m: m.score, reverse=True)[:opts.clips]
+    result = look.check(items, opts.model, forbid=(p.work, work), parallel=opts.pick_parallel)
+    add_notes(work, look_failed_batches=result.failed, look_batches=result.total)
+    best = sorted(result.kept, key=lambda m: m.score, reverse=True)[:opts.clips]
     return sorted(best, key=lambda m: m.start)
 
 

@@ -20,6 +20,7 @@ DEFAULT_STREAMS = 3
 DEFAULT_PARALLEL = 2
 DEFAULT_PICK_PARALLEL = 4
 PLATFORMS = ("youtube", "twitch")
+CLIP_ERROR_CHARS = 200
 WHOLE_STREAM_DONE = 1e9  # processed-until for a stream of unknown length: done once processed whole
 
 
@@ -137,19 +138,28 @@ def _select(stream, work, section, opts, p, s, label) -> Tuple[List[Moment], dic
     return chosen, {"listen": t_listen, "pick": t_pick, "look": t_look}
 
 
-def _make_clips(stream, work, chosen, opts, label, meta) -> Tuple[List[Tuple[Moment, Path]], dict]:
-    items, totals = [], {}
+def _make_clips(stream, work, chosen, opts, label, meta) -> Tuple[List[Tuple[Moment, Path]], dict, int]:
+    """(made clips, summed stage seconds, failed count); one failing clip is logged and left out."""
+    items, totals, failed = [], {}, 0
     for i, m in enumerate(chosen):
-        moment, out, timings = stages.clip_stage(stream, work, archiving.clip_name(meta, i), m, opts)
+        nn = archiving.clip_name(meta, i)
+        try:
+            moment, out, timings = stages.clip_stage(stream, work, nn, m, opts)
+        except Exception as exc:  # one bad clip must not block the rest of the stream
+            failed += 1
+            print(f"[{label}] clip {nn} failed ({m.start:.0f}-{m.end:.0f} s): {type(exc).__name__}: "
+                  f"{str(exc)[:CLIP_ERROR_CHARS]}", flush=True)
+            continue
         items.append((moment, out))
         totals = {k: totals.get(k, 0.0) + timings.get(k, 0.0) for k in {*totals, *timings}}
     for stage in ("fetch", "layout", "captions", "render"):
         _log(label, stage, totals.get(stage, 0.0))
-    return items, totals
+    return items, totals, failed
 
 
-def _finish(stream, work, items, seconds, opts, p, meta, label, save_state) -> List[Path]:
-    posted = post.write(work / "out", stream, [(m, Path(out.name)) for m, out in items], seconds, meta.stamp)
+def _finish(stream, work, items, seconds, opts, p, meta, label, save_state, notes) -> List[Path]:
+    posted = post.write(work / "out", stream, [(m, Path(out.name)) for m, out in items], seconds, meta.stamp,
+                        notes=notes)
     files = [out for _, out in items] + posted
     archived, _ = _timed(label, "archive", lambda: archive_stream(
         work, files, out_dir(p, stream, meta.day), p, opts.keep_work,
@@ -182,8 +192,11 @@ def process_stream(stream: Stream, opts: stages.Options, p: config.Paths, day: s
 
     chosen, seconds = _select(stream, work, section, opts, p, s, label)
     if chosen:
-        items, clip_seconds = _make_clips(stream, work, chosen, opts, label, meta)
-        return _finish(stream, work, items, {**seconds, **clip_seconds}, opts, p, meta, label, save_state)
+        items, clip_seconds, failed = _make_clips(stream, work, chosen, opts, label, meta)
+        if not items:
+            raise RuntimeError(f"all {failed} clips failed; work folder kept for a retry")
+        notes = {**stages.read_notes(work), "failed_clips": failed}
+        return _finish(stream, work, items, {**seconds, **clip_seconds}, opts, p, meta, label, save_state, notes)
     print(f"[{label}] no clips found", flush=True)
     save_state([])
     if not opts.keep_work:

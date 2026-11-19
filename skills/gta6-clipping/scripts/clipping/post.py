@@ -3,7 +3,7 @@ import json
 import urllib.parse
 from dataclasses import asdict
 from pathlib import Path
-from typing import List, Mapping, Sequence, Tuple
+from typing import List, Mapping, Optional, Sequence, Tuple
 
 from .models import Moment, Stream
 
@@ -52,14 +52,15 @@ def _clips_json(items: Sequence[ClipItem]) -> str:
 
 
 def write(work_out: Path, stream: Stream, items: Sequence[ClipItem],
-          seconds: Mapping[str, float], stamp: str) -> List[Path]:
+          seconds: Mapping[str, float], stamp: str, notes: Optional[Mapping] = None) -> List[Path]:
     """Write POST_<stamp>.md, clips_<stamp>.json and report_<stamp>.json into `work_out`.
 
     The stamp (run start time) keeps several runs of one stream in the same day folder apart.
+    `notes` (failure counts such as failed_clips, pick_failed_chunks) are added to the report.
     """
     work_out.mkdir(parents=True, exist_ok=True)
     report = {"stream": asdict(stream), "clips": len(items),
-              "seconds": {k: round(v, 1) for k, v in seconds.items()}}
+              "seconds": {k: round(v, 1) for k, v in seconds.items()}, **(notes or {})}
     contents = {
         f"POST_{stamp}.md": render_md(stream, items),
         f"clips_{stamp}.json": _clips_json(items),

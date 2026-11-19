@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from clipping.config import paths
@@ -11,6 +13,9 @@ from clipping.storage import (
     safe_path,
     usage_warning,
 )
+
+
+EXT = -1  # fake home device id: tmp_path then counts as "external"
 
 
 def test_safe_path_rejects_parent_escape(tmp_path):
@@ -55,21 +60,21 @@ def test_archive_file_refuses_over_limit(tmp_path):
 
 def test_archive_file_copies_and_keeps_source(tmp_path):
     src = tmp_path / "c.mp4"; src.write_bytes(b"abc"); root = tmp_path / "arch"; root.mkdir()
-    out = archive_file(src, root / "2026-11-19" / "c.mp4", root)
+    out = archive_file(src, root / "2026-11-19" / "c.mp4", root, home_dev=EXT)
     assert out.read_bytes() == b"abc" and src.exists()
 
 
 def test_archive_file_refuses_dest_outside_root(tmp_path):
     src = tmp_path / "c.mp4"; src.write_bytes(b"abc"); root = tmp_path / "arch"; root.mkdir()
     with pytest.raises(UnsafePathError):
-        archive_file(src, tmp_path / "elsewhere" / "c.mp4", root)
+        archive_file(src, tmp_path / "elsewhere" / "c.mp4", root, home_dev=EXT)
     assert not (tmp_path / "elsewhere").exists()
 
 
 def test_archive_file_never_creates_missing_root(tmp_path):
     src = tmp_path / "c.mp4"; src.write_bytes(b"abc")
     with pytest.raises(FileNotFoundError):
-        archive_file(src, tmp_path / "KINGSTOM" / "arch" / "c.mp4", tmp_path / "KINGSTOM" / "arch")
+        archive_file(src, tmp_path / "KINGSTOM" / "arch" / "c.mp4", tmp_path / "KINGSTOM" / "arch", home_dev=EXT)
     assert not (tmp_path / "KINGSTOM").exists()
 
 
@@ -77,9 +82,9 @@ def test_archive_file_deletes_partial_copy_on_size_mismatch(tmp_path, monkeypatc
     from clipping import storage
 
     src = tmp_path / "c.mp4"; src.write_bytes(b"abc"); root = tmp_path / "arch"; root.mkdir()
-    monkeypatch.setattr(storage.shutil, "copyfile", lambda s, d: open(d, "wb").write(b"a"))
+    monkeypatch.setattr(storage.shutil, "copyfile", lambda s, d: Path(d).write_bytes(b"a"))
     with pytest.raises(IOError):
-        archive_file(src, root / "c.mp4", root)
+        archive_file(src, root / "c.mp4", root, home_dev=EXT)
     assert not (root / "c.mp4").exists() and src.exists()
 
 
@@ -98,7 +103,7 @@ def test_preflight_low_space(tmp_path):
 
 def test_preflight_all_ok(tmp_path):
     p = paths({"CLIP_ARCHIVE": str(tmp_path)})
-    assert all(c.ok for c in preflight(p, mac_free=50_000_000_000, stick_free=10_000_000_000))
+    assert all(c.ok for c in preflight(p, mac_free=50_000_000_000, stick_free=10_000_000_000, home_dev=EXT))
 
 
 def test_usage_warning_over_80_percent():
@@ -117,8 +122,87 @@ def test_free_bytes_none_for_missing_path(tmp_path):
 def test_clean_work_refuses_outside_work_root(tmp_path):
     work_root = tmp_path / "work"; (work_root / "s1").mkdir(parents=True); other = tmp_path / "photos"; other.mkdir()
     with pytest.raises(UnsafePathError):
-        clean_work(other, work_root)
+        clean_work(other, work_root, home=tmp_path)
     with pytest.raises(UnsafePathError):
-        clean_work(work_root, work_root)
-    clean_work(work_root / "s1", work_root)
+        clean_work(work_root, work_root, home=tmp_path)
+    clean_work(work_root / "s1", work_root, home=tmp_path)
     assert other.exists() and not (work_root / "s1").exists()
+
+
+def test_safe_path_rejects_sibling_with_same_prefix(tmp_path):
+    root = tmp_path / "Cartella di Claude"; root.mkdir()
+    with pytest.raises(UnsafePathError):
+        safe_path(root, tmp_path / "Cartella di Claude2" / "x")
+
+
+def test_safe_path_rejects_dotdot_after_missing_components(tmp_path):
+    root = tmp_path / "a"; root.mkdir()
+    with pytest.raises(UnsafePathError):
+        safe_path(root, root / "nope" / ".." / ".." / "b" / "x")
+
+
+def test_archive_file_copy_error_leaves_no_part_and_no_target(tmp_path, monkeypatch):
+    from clipping import storage
+
+    src = tmp_path / "c.mp4"; src.write_bytes(b"abc"); root = tmp_path / "arch"; root.mkdir()
+
+    def boom(s, d):
+        Path(d).write_bytes(b"a")
+        raise OSError("ENOSPC")
+
+    monkeypatch.setattr(storage.shutil, "copyfile", boom)
+    with pytest.raises(OSError):
+        archive_file(src, root / "c.mp4", root, home_dev=EXT)
+    assert list(root.iterdir()) == []
+
+
+def test_archive_file_refuses_existing_dest_untouched(tmp_path):
+    src = tmp_path / "c.mp4"; src.write_bytes(b"new"); root = tmp_path / "arch"; root.mkdir()
+    (root / "c.mp4").write_bytes(b"old")
+    with pytest.raises(FileExistsError):
+        archive_file(src, root / "c.mp4", root, home_dev=EXT)
+    assert (root / "c.mp4").read_bytes() == b"old" and not (root / "c.mp4.part").exists()
+
+
+def test_size_mismatch_keeps_preexisting_sibling_and_no_part(tmp_path, monkeypatch):
+    from clipping import storage
+
+    src = tmp_path / "c.mp4"; src.write_bytes(b"abc"); root = tmp_path / "arch"; root.mkdir()
+    (root / "other.mp4").write_bytes(b"keep")
+    monkeypatch.setattr(storage.shutil, "copyfile", lambda s, d: Path(d).write_bytes(b"a"))
+    with pytest.raises(IOError):
+        archive_file(src, root / "c.mp4", root, home_dev=EXT)
+    assert sorted(x.name for x in root.iterdir()) == ["other.mp4"]
+
+
+def test_archive_on_same_device_as_home_is_not_the_stick(tmp_path):
+    import os
+
+    home_dev = os.stat(tmp_path).st_dev
+    p = paths({"CLIP_ARCHIVE": str(tmp_path)})
+    checks = preflight(p, mac_free=50_000_000_000, stick_free=10_000_000_000, home_dev=home_dev)
+    assert any(not c.ok and "chiavetta" in c.fix.lower() for c in checks)
+    src = tmp_path / "c.mp4"; src.write_bytes(b"abc")
+    with pytest.raises(FileNotFoundError):
+        archive_file(src, tmp_path / "arch" / "c.mp4", tmp_path / "arch", home_dev=home_dev)
+
+
+def test_preflight_messages_use_settings_thresholds(tmp_path):
+    p = paths({"CLIP_ARCHIVE": str(tmp_path)})
+    fixes = " ".join(c.fix for c in preflight(p, 1, 1, home_dev=EXT))
+    assert "5 GB" in fixes and "2 GB" in fixes
+
+
+def test_clean_work_refuses_work_root_on_a_volume(tmp_path):
+    volumes = tmp_path / "Volumes"; work_root = volumes / "KINGSTOM" / "work"; (work_root / "s1").mkdir(parents=True)
+    with pytest.raises(UnsafePathError):
+        clean_work(work_root / "s1", work_root, home=tmp_path, volumes=volumes)
+    assert (work_root / "s1").exists()
+
+
+def test_clean_work_refuses_work_root_outside_home(tmp_path):
+    home = tmp_path / "home"; home.mkdir()
+    work_root = tmp_path / "elsewhere" / "work"; (work_root / "s1").mkdir(parents=True)
+    with pytest.raises(UnsafePathError):
+        clean_work(work_root / "s1", work_root, home=home, volumes=tmp_path / "Volumes")
+    assert (work_root / "s1").exists()

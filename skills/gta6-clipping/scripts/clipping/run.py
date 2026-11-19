@@ -2,11 +2,12 @@
 -> archive to the stick. Resumable: stage files live in ~/gta6-clips/work/<stream>/.
 CLI: python -m clipping.run [URL ...] (see --help)."""
 import argparse
+import json
 import shutil
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
@@ -78,6 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--redo", action="store_true", help="ignore saved stage files")
     ap.add_argument("--keep-work", action="store_true", help="keep the Mac work folder after archiving")
     ap.add_argument("--parallel", type=_positive_int, default=DEFAULT_PARALLEL, help="streams at a time")
+    ap.add_argument("--pick-only", action="store_true",
+                    help="pick and check moments only; write compare_<time>.json, no clips, no archive")
     ap.add_argument("--pick-parallel", type=_positive_int, default=DEFAULT_PICK_PARALLEL, help="Claude pick calls at a time")
     return ap
 
@@ -89,7 +92,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def options(args: argparse.Namespace) -> stages.Options:
     return stages.Options(clips=args.clips, model=args.model, cookies=args.cookies, layout=args.layout,
                           fast=args.fast, redo=args.redo, keep_work=args.keep_work,
-                          pick_parallel=args.pick_parallel, section=args.section)
+                          pick_parallel=args.pick_parallel, section=args.section,
+                          pick_only=args.pick_only)
 
 
 def stream_from_url(url: str, cookies: Optional[str], info: Callable = ytdlp.info,
@@ -178,6 +182,20 @@ def _finish(stream, work, items, seconds, opts, p, meta, label, save_state, note
     return archived
 
 
+def _pick_only(stream: Stream, work: Path, section, opts: stages.Options, p: config.Paths, label: str) -> List[Path]:
+    """Moments as a fresh run would choose them (already-clipped ones included), saved for comparison.
+
+    Writes only `<work>/compare_<HHMMSS>.json`: no clip, no archive, no state change, work kept.
+    """
+    chosen, _ = _select(stream, work, section, opts, p, state.RunState(), label)
+    path = work / f"compare_{datetime.now().strftime('%H%M%S')}.json"
+    data = {"stream": asdict(stream), "moments": [stages.moment_to_dict(m) for m in chosen],
+            "notes": stages.read_notes(work)}
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[{label}] pick-only: {len(chosen)} moments -> {path}", flush=True)
+    return []
+
+
 def process_stream(stream: Stream, opts: stages.Options, p: config.Paths, day: str) -> List[Path]:
     """Run every stage for one stream; returns the archived paths.
 
@@ -196,6 +214,8 @@ def process_stream(stream: Stream, opts: stages.Options, p: config.Paths, day: s
     work.mkdir(parents=True, exist_ok=True)
     if stages.cached_section_differs(work, section):
         opts = replace(opts, redo=True)
+    if opts.pick_only:
+        return _pick_only(stream, work, section, opts, p, label)
     meta = archiving.run_meta(work, p, stream, day, opts.redo)
 
     def save_state(moments: List[Moment]) -> None:

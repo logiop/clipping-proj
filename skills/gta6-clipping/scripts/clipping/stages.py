@@ -34,6 +34,7 @@ class Options:
     keep_work: bool = False
     pick_parallel: int = 4
     section: Section = None
+    pick_only: bool = False  # stop after the visual check; for comparisons (no clips, no archive)
 
 
 def _write_json(path: Path, data) -> None:

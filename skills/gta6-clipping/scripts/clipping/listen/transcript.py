@@ -103,14 +103,22 @@ def _whisper_faster(audio: Path, model: str, words: bool):
     return segs, word_list, info.language, info.language_probability
 
 
-def get(stream: Stream, audio: Path, cookies: Optional[str] = None) -> List[Segment]:
-    """Platform English captions if available, otherwise Whisper `tiny` on the audio."""
+def get(stream: Stream, audio: Path, cookies: Optional[str] = None,
+        section: Optional[Tuple[float, float]] = None) -> List[Segment]:
+    """Platform English captions if available, otherwise Whisper `tiny` on the audio.
+
+    Times are stream time. With `section` (the audio covers only [start, end] of the stream),
+    platform captions are limited to the section and Whisper times are shifted by its start.
+    """
     try:
         url = find_caption_url(ytdlp.info(stream.url, cookies))
         segments = parse_vtt(_fetch_text(url)) if url else []
     except (RuntimeError, OSError) as exc:
         print(f"caption lookup failed ({type(exc).__name__}); falling back to Whisper tiny", file=sys.stderr)
         segments = []
+    if section is not None:
+        segments = [s for s in segments if s.end > section[0] and s.start < section[1]]
     if segments:
         return segments
-    return whisper(audio, FALLBACK_MODEL, False)[0]
+    offset = section[0] if section is not None else 0.0
+    return [Segment(s.start + offset, s.end + offset, s.text) for s in whisper(audio, FALLBACK_MODEL, False)[0]]

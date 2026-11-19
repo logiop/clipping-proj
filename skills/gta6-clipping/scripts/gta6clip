@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# gta6clip [URL ...] [--find] [--list] ... : vertical GTA 6 clips, archived to the USB stick.
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Whisper model cache lives on the stick (Paths.hf_home = <archive>/models).
+export HF_HOME="${CLIP_ARCHIVE:-/Volumes/KINGSTOM/Cartella di Claude}/models"
+PYTHONPATH="$DIR" exec "$HOME/.gta6-clipping/venv/bin/python" -m clipping.run "$@"

@@ -103,3 +103,16 @@ def test_whisper_faster_passes_language_through(monkeypatch):
     segs, words, lang, prob = transcript.whisper(Path("a.m4a"), "tiny", True)
     assert (lang, prob) == ("it", 0.77)
     assert words[0].text == "hi" and segs[0].text == "hi"
+
+
+def test_get_with_section_keeps_platform_captions_inside_it(monkeypatch):
+    monkeypatch.setattr(transcript.ytdlp, "info", lambda *a, **k: {"subtitles": {"en": [{"ext": "vtt", "url": "u"}]}})
+    vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nearly\n\n01:00:05.000 --> 01:00:07.000\ninside\n"
+    monkeypatch.setattr(transcript, "_fetch_text", lambda url: vtt)
+    assert transcript.get(STREAM, Path("a.m4a"), section=(3600.0, 4200.0)) == [Segment(3605.0, 3607.0, "inside")]
+
+
+def test_get_with_section_shifts_whisper_to_stream_time(monkeypatch):
+    monkeypatch.setattr(transcript.ytdlp, "info", lambda *a, **k: {})
+    monkeypatch.setattr(transcript, "whisper", lambda audio, model, words: ([Segment(1.0, 2.0, "hi")], [], "en", 1.0))
+    assert transcript.get(STREAM, Path("a.m4a"), section=(3600.0, 4200.0)) == [Segment(3601.0, 3602.0, "hi")]

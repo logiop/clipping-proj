@@ -58,7 +58,7 @@ def _home_dev(home_dev: Optional[int]) -> int:
     return home_dev if home_dev is not None else os.stat(Path.home()).st_dev
 
 
-def _on_external_volume(root: Path, home_dev: Optional[int]) -> bool:
+def on_external_volume(root: Path, home_dev: Optional[int] = None) -> bool:
     """True only when root exists and lives on a different device than the Mac home."""
     root = Path(root)
     return root.is_dir() and os.stat(root).st_dev != _home_dev(home_dev)
@@ -74,7 +74,7 @@ def preflight(
         mac_ok,
         "" if mac_ok else f"Spazio sul Mac sotto {settings.min_mac_free_bytes // GB} GB: libera spazio",
     )
-    if stick_free is None or not _on_external_volume(p.archive, home_dev):
+    if stick_free is None or not on_external_volume(p.archive, home_dev):
         return [mac, Check("archive", False, STICK_MISSING_FIX)]
     stick_ok = stick_free >= settings.min_stick_free_bytes
     stick_gb = settings.min_stick_free_bytes // GB
@@ -110,7 +110,7 @@ def archive_file(
     size = src.stat().st_size
     if size > max_bytes:
         raise ValueError(f"{src.name} is {size} bytes, over the {max_bytes} byte limit")
-    if not _on_external_volume(root, home_dev):
+    if not on_external_volume(root, home_dev):
         raise FileNotFoundError(f"Archive root missing or not on an external volume: {root}")
     target = safe_path(root, dest)
     if target.exists():

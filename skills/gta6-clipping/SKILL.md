@@ -1,6 +1,6 @@
 ---
 name: gta6-clipping
-description: Use when the user wants to turn GTA 6 streams, VODs or live URLs (YouTube, Twitch, Kick) into ready-to-review vertical 9:16 clips with a facecam layout, word-by-word captions, a hook title and streamer credit, or wants to find the biggest GTA 6 streams right now. Clips and a POST.md with caption and hashtags are archived on the USB stick. Claude never posts them.
+description: Use when the user wants to turn GTA 6 streams, VODs or live URLs (YouTube, Twitch) into ready-to-review vertical 9:16 clips with a facecam layout, word-by-word captions, a hook title and streamer credit, or wants to find the biggest GTA 6 streams right now. Clips and a POST.md with caption and hashtags are archived on the USB stick. Claude never posts them.
 ---
 
 # GTA 6 clipping
@@ -24,7 +24,7 @@ Pipeline: audio only -> Whisper transcript + loudness -> Claude picks moments ->
 | Part of a stream | `gta6clip <URL> --section 2:00:00-4:00:00` (A-B in seconds, m:ss or h:mm:ss) |
 | List streams found now | `gta6clip --find --list` |
 | Find and clip N streams | `gta6clip --find --streams 7 --clips 3 --fast` |
-| Age-restricted / Kick | add `--cookies <browser>`, e.g. `--cookies chrome` |
+| Age-restricted | add `--cookies <browser>`, e.g. `--cookies chrome` |
 | Force a layout | `--layout {auto,stream,face,fit}` |
 | Redo from scratch | `--redo` (ignores saved stage files) |
 | Keep Mac work folder | `--keep-work` |
@@ -44,8 +44,8 @@ Pipeline: audio only -> Whisper transcript + loudness -> Claude picks moments ->
 ## Launch-day playbook
 
 1. Plug in the stick (before setup.sh on a fresh install), run `gta6clip --find --list` and pick the biggest streams.
-2. First pass on live streams: `gta6clip <URL> --clips 3 --fast`.
-3. Re-run live streams every 2-3 h. Saved state resumes where the last run stopped and re-reads a 90 s overlap, so no moment is cut at the boundary. Use `--redo` only if state is corrupt.
+2. Live mode is NOT yet verified end to end on real platforms (YouTube may need `--live-from-start`; Twitch live HLS cannot seek back). For now wait for the stream to end and run on the VOD: `gta6clip <VOD_URL> --clips 3 --fast` (use `--section` for a part of it).
+3. If you still run on a live URL, treat it as experimental: re-run every 2-3 h; saved state resumes where the last run stopped and re-reads a 90 s overlap. Use `--redo` only if state is corrupt.
 4. After each run read `report_<HHMMSS>.json` and the `POST_<HHMMSS>.md`, then review (below).
 5. Check the stick usage warning; free space yourself, the skill will not.
 

@@ -57,7 +57,9 @@ bash $G <URL> --section "2:00:00-4:00:00"  # part of a stream
 Output: `<archive>/gta6-clips/<YYYY-MM-DD>/<@streamer>__<title>/NN.mp4` plus `POST_<HHMMSS>.md`,
 `clips_<HHMMSS>.json`, `report_<HHMMSS>.json`. Live state is in `<archive>/gta6-clips/state/`; the Mac work
 cache `~/gta6-clips/work/` is removed after a successful archive (`--keep-work` keeps it). The skill writes only
-inside the archive root and never deletes anything on the stick. Age-restricted YouTube and Kick need `--cookies chrome`.
+inside the archive root and never deletes anything on the stick. Age-restricted YouTube needs `--cookies chrome`.
+Only YouTube and Twitch links are supported. Live mode is not yet verified end to end (YouTube may need
+`--live-from-start`; Twitch live HLS cannot seek back): for now run on the VOD after the stream ends.
 See `skills/gta6-clipping/SKILL.md` for the launch-day playbook and review checklist.
 
 ### Gotchas we hit
@@ -86,8 +88,9 @@ See `skills/gta6-clipping/SKILL.md` for the launch-day playbook and review check
 
 Pipeline: scarichi solo l'audio dello stream, Whisper lo trascrive, Claude sceglie i momenti migliori,
 vengono scaricati solo quei minuti e montati in 9:16 con facecam, titolo hook e sottotitoli parola per parola.
-Installazione: copia `skills/gta6-clipping` in `~/.claude/skills/`, esegui `bash ~/.claude/skills/gta6-clipping/scripts/setup.sh`
-e collega la chiavetta USB: le clip finiscono lì (`<archivio>/gta6-clips/<data>/`), mai altrove, e la skill non cancella nulla sulla chiavetta.
-Il piano: lancio con la skill così com'è, poi sottotitoli più precisi, versioni EN/IT per account separati,
+Installazione: copia `skills/gta6-clipping` in `~/.claude/skills/`, collega PRIMA la chiavetta USB, poi esegui
+`bash ~/.claude/skills/gta6-clipping/scripts/setup.sh`: le clip finiscono sulla chiavetta (`<archivio>/gta6-clips/<data>/`), mai altrove, e la skill non cancella nulla sulla chiavetta.
+Solo link YouTube e Twitch. La modalità live non è ancora verificata end to end: per ora lancia la skill sul VOD
+a stream finito. Il piano: lancio con la skill così com'è, poi sottotitoli più precisi, versioni EN/IT per account separati,
 formato "streamer A vs B" e, per ultimo, voiceover ElevenLabs solo sui silenzi con approvazione umana.
 Clippa solo streamer che lo permettono, citali, e controlla ogni clip prima di pubblicare. Claude non pubblica mai.

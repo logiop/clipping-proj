@@ -400,9 +400,9 @@ def test_process_stream_redoes_stages_when_section_changed(tmp_path, monkeypatch
 def test_run_prints_token_line(tmp_path, monkeypatch, capsys):
     from clipping import stages
     monkeypatch.setattr(stages, "listen_stage", lambda *a, **k: ([], [], []))
-    monkeypatch.setattr(stages, "pick_stage", lambda *a, **k: [])
+    monkeypatch.setattr(stages, "pick_stage", lambda stream, work, heard, opts: (
+        stages.add_notes(work, tokens_pick=900, calls_pick=2, cost_pick_usd=0.1), [])[1])
     monkeypatch.setattr(stages, "look_stage", lambda *a, **k: [])
-    stages.add_notes(tmp_path, tokens_pick=900, calls_pick=2, cost_pick_usd=0.1)
     run._select(None, tmp_path, None, stages.Options(), None, RunState(), "@kai")
     out = capsys.readouterr().out
     assert "[@kai] tokens: 900 (pick 900, look 0), calls 2, cost ≈ $0.10" in out

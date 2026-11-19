@@ -54,3 +54,36 @@ def test_pick_only_ignores_already_clipped(tmp_path, monkeypatch):
 
 def test_cli_pick_only_flag():
     assert run.parse_args(["u", "--pick-only"]).pick_only is True
+
+
+def test_normal_run_after_pick_only_does_not_reclip(tmp_path, monkeypatch):
+    p, _ = _setup(tmp_path, monkeypatch, [_moment(100), _moment(500)], clipped=[(100.0, 130.0)])
+    seen = []
+    monkeypatch.setattr(run.stages, "look_stage",
+                        lambda stream, work, cands, opts, p: [_moment(100), _moment(500)])  # stale cache
+    monkeypatch.setattr(run, "_make_clips", lambda stream, work, chosen, *a: (seen.extend(chosen), ([], {}, 0))[1])
+    try:
+        run.process_stream(STREAM, run.stages.Options(), p, "2026-11-20")
+    except RuntimeError:
+        pass
+    assert [m.start for m in seen] == [500]
+
+
+def test_pick_only_removes_its_unfiltered_selection(tmp_path, monkeypatch):
+    p, _ = _setup(tmp_path, monkeypatch, [_moment(100)])
+
+    def look(stream, work, cands, opts, p):
+        (work / "selected.json").write_text("[]")
+        return cands
+    monkeypatch.setattr(run.stages, "look_stage", look)
+    run.process_stream(STREAM, run.stages.Options(pick_only=True), p, "2026-11-20")
+    assert not (p.work / "youtubeabc" / "selected.json").exists()
+
+
+def test_token_line_does_not_reuse_previous_run_numbers(tmp_path, monkeypatch, capsys):
+    p, _ = _setup(tmp_path, monkeypatch, [_moment(100)])
+    work = p.work / "youtubeabc"
+    run.stages.add_notes(work, tokens_pick=9000, calls_pick=5, cost_pick_usd=1.0,
+                         tokens_look=100, calls_look=1, cost_look_usd=0.1)  # left by an earlier run
+    run.process_stream(STREAM, run.stages.Options(pick_only=True), p, "2026-11-20")  # stages are cached fakes
+    assert "tokens: 0 (pick 0, look 0), calls 0, cost ≈ $0.00" in capsys.readouterr().out

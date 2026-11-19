@@ -144,11 +144,18 @@ def _timed(label: str, stage: str, fn: Callable):
     return value, elapsed
 
 
+ZERO_TOKENS = {f"{k}_{stage}": 0 for stage in ("pick", "look") for k in ("tokens", "calls")}
+ZERO_TOKENS.update(cost_pick_usd=0.0, cost_look_usd=0.0)
+
+
 def _select(stream, work, section, opts, p, s, label) -> Tuple[List[Moment], dict]:
+    """Listen, pick, look; already-clipped moments are dropped even when look is served from cache."""
+    stages.add_notes(work, **ZERO_TOKENS)  # cached stages spend nothing this run
     heard, t_listen = _timed(label, "listen", lambda: stages.listen_stage(stream, work, section, opts))
     found, t_pick = _timed(label, "pick", lambda: stages.pick_stage(stream, work, heard, opts))
     fresh = [m for m in found if not state.already_clipped(s, m)]
-    chosen, t_look = _timed(label, "look", lambda: stages.look_stage(stream, work, fresh, opts, p))
+    looked, t_look = _timed(label, "look", lambda: stages.look_stage(stream, work, fresh, opts, p))
+    chosen = [m for m in looked if not state.already_clipped(s, m)]
     print(f"[{label}] {stages.token_summary(stages.read_notes(work))}", flush=True)
     return chosen, {"listen": t_listen, "pick": t_pick, "look": t_look}
 
@@ -192,6 +199,7 @@ def _pick_only(stream: Stream, work: Path, section, opts: stages.Options, p: con
     data = {"stream": asdict(stream), "moments": [stages.moment_to_dict(m) for m in chosen],
             "notes": stages.read_notes(work)}
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    (work / "selected.json").unlink(missing_ok=True)  # unfiltered: must not feed a later normal run
     print(f"[{label}] pick-only: {len(chosen)} moments -> {path}", flush=True)
     return []
 

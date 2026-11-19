@@ -8,7 +8,6 @@ from pathlib import Path
 
 from clipping import config
 
-MIN_FREE_BYTES = 5_000_000_000
 YUNET_FILE = "face_detection_yunet_2023mar.onnx"
 FFMPEG_FIX = "brew install ffmpeg-full  (the build must include the ass filter)"
 
@@ -28,7 +27,7 @@ def check_ffmpeg(filters_output: str) -> Check:
     return Check("ffmpeg ass filter", has_ass, "" if has_ass else FFMPEG_FIX)
 
 
-def check_disk(free_bytes: int, need_bytes: int = MIN_FREE_BYTES) -> Check:
+def check_disk(free_bytes: int, need_bytes: int = config.MIN_MAC_FREE_BYTES) -> Check:
     ok = free_bytes >= need_bytes
     fix = "" if ok else f"Free space on the Mac: need {need_bytes // 10**9} GB, have {free_bytes / 10**9:.1f} GB"
     return Check("mac disk", ok, fix)
@@ -63,6 +62,9 @@ def _check_yunet() -> Check:
 
 
 def run_all() -> list:
+    from clipping import storage  # lazy: storage imports Check from this module
+
+    p = config.paths()
     ffprobe = Path(config.ffmpeg_bin()).with_name("ffprobe")
     ffprobe_ok = ffprobe.exists() or shutil.which("ffprobe") is not None
     return [
@@ -73,7 +75,9 @@ def run_all() -> list:
         _check_module("faster_whisper", "faster-whisper"),
         _check_binary("claude", "Install the Claude Code CLI"),
         _check_yunet(),
-        check_disk(shutil.disk_usage(Path.home()).free),
+        *storage.preflight(
+            p, shutil.disk_usage(Path.home()).free, storage.free_bytes(p.archive)
+        ),
     ]
 
 

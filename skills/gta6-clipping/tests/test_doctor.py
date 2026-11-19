@@ -18,8 +18,11 @@ def test_enough_disk_passes():
     assert check_disk(free_bytes=10_000_000_000).ok
 
 
-def test_run_all_reports_every_tool_check(monkeypatch):
+def test_run_all_reports_every_tool_check(monkeypatch, tmp_path):
     from clipping import doctor
+
+    real_paths = doctor.config.paths
+    monkeypatch.setattr(doctor.config, "paths", lambda: real_paths({"CLIP_ARCHIVE": str(tmp_path)}))
 
     monkeypatch.setattr(doctor, "_filters_output", lambda: " T.. ass  V->V  x")
     monkeypatch.setattr(doctor.shutil, "which", lambda name: "/bin/" + name)
@@ -27,7 +30,7 @@ def test_run_all_reports_every_tool_check(monkeypatch):
     monkeypatch.setattr(doctor, "_check_yunet", lambda: doctor.Check("yunet model", True, ""))
     checks = doctor.run_all()
     names = {c.name for c in checks}
-    assert {"ffmpeg ass filter", "node", "claude", "yunet model", "mac disk"} <= names
+    assert {"ffmpeg ass filter", "node", "claude", "yunet model", "mac disk", "archive", "stick space"} <= names
 
 
 def test_main_exits_1_and_prints_fix_on_failure(monkeypatch, capsys):

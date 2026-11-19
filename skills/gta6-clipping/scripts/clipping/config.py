@@ -1,4 +1,5 @@
 """Paths and settings. Pure computation: never touches the archive volume."""
+import os
 import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import Mapping, Optional
 DEFAULT_ARCHIVE = "/Volumes/KINGSTOM/Cartella di Claude"
 FFMPEG_FULL = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
 FAT32_MAX_FILE_BYTES = 4 * 1024**3 - 1
+MIN_MAC_FREE_BYTES = 5_000_000_000
+MIN_STICK_FREE_BYTES = 2_000_000_000
 
 EVENT_KEYS = (
     "first_drive",
@@ -49,15 +52,15 @@ class Settings:
     fast_codec: str = "h264_videotoolbox"
     x264_crf: int = 20
     audio_bitrate: str = "192k"
-    min_mac_free_bytes: int = 5_000_000_000
-    min_stick_free_bytes: int = 2_000_000_000
+    min_mac_free_bytes: int = MIN_MAC_FREE_BYTES
+    min_stick_free_bytes: int = MIN_STICK_FREE_BYTES
     stick_warn_ratio: float = 0.8
     fat32_max_file_bytes: int = FAT32_MAX_FILE_BYTES
     event_keys: tuple = EVENT_KEYS
 
 
 def paths(env: Optional[Mapping[str, str]] = None) -> Paths:
-    env = env if env is not None else {}
+    env = os.environ if env is None else env
     home = Path(env.get("HOME", str(Path.home())))
     archive = Path(env.get("CLIP_ARCHIVE") or DEFAULT_ARCHIVE)
     out = archive / "gta6-clips"

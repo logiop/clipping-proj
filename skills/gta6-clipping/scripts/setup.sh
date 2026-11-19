@@ -19,6 +19,15 @@ if [ ! -s "$MODEL_DIR/$YUNET" ]; then
   mv "$MODEL_DIR/$YUNET.part" "$MODEL_DIR/$YUNET"
 fi
 
+# Whisper cache lives on the stick; only created when the archive root exists.
+ARCHIVE="${CLIP_ARCHIVE:-/Volumes/KINGSTOM/Cartella di Claude}"
+if [ -d "$ARCHIVE" ]; then
+  mkdir -p "$ARCHIVE/models"
+  export HF_HOME="$ARCHIVE/models"
+else
+  echo "Chiavetta non trovata: collega KINGSTOM per usare la cache di Whisper"
+fi
+
 cd "$SKILL_DIR/scripts"
 "$VENV/bin/python" -m clipping.doctor
 echo "All set"

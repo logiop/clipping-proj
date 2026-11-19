@@ -128,3 +128,59 @@ def test_ask_none_on_error_envelope():
 
 def test_ask_none_when_no_output():
     assert claude.ask("p", SCHEMA, "m", runner=fake(envelope(result="plain text"))) is None
+
+
+# --- token budget (lean context + usage meter) ---
+
+def _flag_value(argv, flag):
+    return argv[argv.index(flag) + 1]
+
+
+def test_ask_runs_without_user_settings_and_with_short_system_prompt():
+    calls = []
+    claude.ask("p", SCHEMA, "sonnet", runner=fake(envelope(structured_output={"n": 1}), calls=calls))
+    argv = calls[0][0]
+    assert _flag_value(argv, "--setting-sources") == ""
+    assert _flag_value(argv, "--system-prompt") == claude.SYSTEM_PROMPT
+    for flag in ("--strict-mcp-config", "--no-session-persistence", "--json-schema"):
+        assert flag in argv
+    assert _flag_value(argv, "--permission-mode") == "dontAsk"
+
+
+def test_usage_from_envelope():
+    env = {"usage": {"input_tokens": 2, "cache_creation_input_tokens": 14129,
+                     "cache_read_input_tokens": 649, "output_tokens": 4},
+           "total_cost_usd": 0.0028}
+    u = claude.usage_from(env)
+    assert u == claude.Usage(2, 14129, 649, 4, 0.0028, 1)
+    assert u.total_tokens == 14784
+
+
+def test_meter_ignores_missing_usage():
+    meter = claude.UsageMeter()
+    meter.add(claude.usage_from({}))
+    total = meter.total()
+    assert total.total_tokens == 0 and total.cost_usd == 0.0 and total.calls == 1
+
+
+def test_meter_is_thread_safe():
+    import threading
+    meter = claude.UsageMeter()
+
+    def work():
+        for _ in range(100):
+            meter.add(claude.Usage(input=1, calls=1))
+
+    threads = [threading.Thread(target=work) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert meter.total().input == 800 and meter.total().calls == 800
+
+
+def test_usage_recorded_even_when_schema_fails():
+    meter = claude.UsageMeter()
+    out = envelope(structured_output={"n": "not-int"}, usage={"input_tokens": 5, "output_tokens": 1})
+    assert claude.ask("p", SCHEMA, "sonnet", runner=fake(out), meter=meter) is None
+    assert meter.total().calls == 1 and meter.total().input == 5

@@ -96,10 +96,12 @@ def test_whisper_faster_passes_language_through(monkeypatch):
         def __init__(self, name, **kw):
             pass
 
-        def transcribe(self, path, word_timestamps):
+        def transcribe(self, audio, word_timestamps):
+            assert audio == "decoded"
             return iter([seg]), info
 
     monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=Model))
+    monkeypatch.setattr(transcript, "load_audio", lambda path: "decoded")
     segs, words, lang, prob = transcript.whisper(Path("a.m4a"), "tiny", True)
     assert (lang, prob) == ("it", 0.77)
     assert words[0].text == "hi" and segs[0].text == "hi"
@@ -116,3 +118,23 @@ def test_get_with_section_shifts_whisper_to_stream_time(monkeypatch):
     monkeypatch.setattr(transcript.ytdlp, "info", lambda *a, **k: {})
     monkeypatch.setattr(transcript, "whisper", lambda audio, model, words: ([Segment(1.0, 2.0, "hi")], [], "en", 1.0))
     assert transcript.get(STREAM, Path("a.m4a"), section=(3600.0, 4200.0)) == [Segment(3601.0, 3602.0, "hi")]
+
+
+def test_load_audio_decodes_with_ffmpeg_to_16k_mono_float(monkeypatch):
+    import numpy as np
+    seen = {}
+
+    def runner(cmd, **kw):
+        seen["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout=np.array([0.5, -0.25], dtype="<f4").tobytes(), stderr=b"")
+
+    out = transcript.load_audio(Path("a.m4a"), runner=runner)
+    assert out.dtype == np.float32 and out.tolist() == [0.5, -0.25]
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("-ar") + 1] == "16000" and cmd[cmd.index("-ac") + 1] == "1" and "f32le" in cmd
+
+
+def test_load_audio_failure_raises():
+    runner = lambda cmd, **kw: types.SimpleNamespace(returncode=1, stdout=b"", stderr=b"bad file")  # noqa: E731
+    with pytest.raises(RuntimeError):
+        transcript.load_audio(Path("a.m4a"), runner=runner)

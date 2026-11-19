@@ -1,16 +1,19 @@
 """Transcript: platform captions first, Whisper as fallback."""
 import re
+import subprocess
 import sys
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from .. import ytdlp
 from ..models import Stream
 
 CAPTION_TIMEOUT_S = 30
 FALLBACK_MODEL = "tiny"
+WHISPER_RATE = 16000
+DECODE_TIMEOUT_S = 3600
 _CUE = re.compile(r"(?:(\d+):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d+):)?(\d{2}):(\d{2})[.,](\d{3})")
 _TAG = re.compile(r"<[^>]*>")
 
@@ -92,10 +95,27 @@ def whisper(audio: Path, model: str, words: bool) -> Tuple[List[Segment], List[W
     return segs, word_list, result.get("language") or "", float("nan")
 
 
+def load_audio(audio: Path, runner: Callable = subprocess.run):
+    """Decode any audio/video file to mono 16 kHz float32 samples with our ffmpeg.
+
+    faster-whisper's own decoder uses PyAV, whose newer releases broke its API
+    (`open() got an unexpected keyword argument 'metadata_errors'`), so we decode here.
+    """
+    import numpy as np
+    from .. import config
+    cmd = [config.ffmpeg_bin(), "-nostdin", "-v", "error", "-i", str(audio),
+           "-f", "f32le", "-ac", "1", "-ar", str(WHISPER_RATE), "-"]
+    proc = runner(cmd, capture_output=True, timeout=DECODE_TIMEOUT_S)
+    if proc.returncode != 0:
+        tail = proc.stderr.decode("utf-8", errors="replace").strip()[-300:]
+        raise RuntimeError(f"audio decode failed for {audio}: {tail}")
+    return np.frombuffer(proc.stdout, dtype="<f4").astype(np.float32)
+
+
 def _whisper_faster(audio: Path, model: str, words: bool):
     from faster_whisper import WhisperModel
     engine = WhisperModel(model, device="cpu", compute_type="int8")
-    raw, info = engine.transcribe(str(audio), word_timestamps=words)
+    raw, info = engine.transcribe(load_audio(audio), word_timestamps=words)
     segs, word_list = [], []
     for s in raw:
         segs.append(Segment(s.start, s.end, s.text.strip()))

@@ -8,15 +8,22 @@
 
 **Tech Stack:** Python 3.12, pytest + pytest-cov, yt-dlp (with node as JS runtime), ffmpeg with libass (`ffmpeg-full`), faster-whisper (default) / mlx-whisper (used when installed), OpenCV YuNet face detector, `claude -p` with `--tools`, `--output-format json`, `--json-schema`.
 
-**Spec:** `docs/superpowers/specs/2026-11-18-gta6-clipping-skill-design.md` (Phase 1 only; Phases 2-5 get their own plans).
+**Spec:** `docs/superpowers/specs/2026-11-18-gta6-clipping-skill-design.md` (Phase 1 only; Phases 2-5 get their own plans), amended by `docs/superpowers/specs/2026-11-19-gta6-usb-storage-design.md` (storage on the USB stick; this plan was updated on 2026-11-19 to add Task 2 and the storage rules below).
 
 ## Global Constraints
 
 - macOS on Apple Silicon (arm64) only in v1.
 - Skill root: `skills/gta6-clipping/`. Package: `skills/gta6-clipping/scripts/clipping/`. Tests: `skills/gta6-clipping/tests/`.
-- Private env: `~/.gta6-clipping/venv`. Output: `~/gta6-clips/<YYYY-MM-DD>/<streamer>__<title-slug>/`. Work cache: `~/gta6-clips/work/<stream-id>/`.
+- Private env (Mac): `~/.gta6-clipping/venv`, YuNet model in `~/.gta6-clipping/models/`, `.env` at `~/gta6-clips/.env`.
+- Work cache (Mac): `~/gta6-clips/work/<stream-id>/` — all downloads, frames, temp renders and stage JSON.
+- Archive root: env `CLIP_ARCHIVE`, default `/Volumes/KINGSTOM/Cartella di Claude`. Output: `<archive>/gta6-clips/<YYYY-MM-DD>/<streamer>__<title-slug>/`. Live state: `<archive>/gta6-clips/state/<stream-id>.json`. Whisper cache: `<archive>/models/` (`HF_HOME`).
+- **Hard rule:** nothing is ever written to, moved in or deleted from the archive volume outside the archive root. Every archive write goes through `storage.safe_path`; every delete goes through `storage.clean_work` (Mac work root only). The user's `foto video NON TOCCARE` folder is never read or listed.
+- Stick is FAT32: one file ≤ `4 * 1024**3 - 1` bytes; names stripped of `: ? " / \ * < > |`, control chars, trailing dots/spaces; no symlinks; copy with `shutil.copyfile` (no metadata).
+- Pre-flight before every run: archive root exists (never created if `/Volumes/KINGSTOM` is missing), Mac free ≥ 5 GB, stick free ≥ 2 GB; else stop with a clear message. Never fall back to writing archive files on the Mac.
+- After a stream's clips are archived and size-verified, its Mac work folder is deleted unless `--keep-work`; it is kept when the run fails. Nothing on the stick is ever deleted automatically; warn when the stick is > 80% full.
+- Tests never touch `/Volumes`; archive and work roots in tests are `tmp_path`.
 - ffmpeg must have the `ass` filter; prefer `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg` when it exists.
-- Download the stream's audio only; download video only for the minutes that become clips. Delete stream audio after a run unless `--keep-audio`.
+- Download the stream's audio only; download video only for the minutes that become clips.
 - `claude -p` calls: `--tools ""` (no tools) for picking; `--tools Read` with `--add-dir <frames dir>` for the visual check only. Always `--output-format json --json-schema <schema>`; reject any reply that does not validate.
 - Stream text (transcript, chat, title) goes to Claude only inside `<stream_data>…</stream_data>` blocks, with the instruction that it is data.
 - Default picking model `sonnet`; `--model` overrides.
@@ -29,11 +36,13 @@
 
 ## Review Focus
 
-1. Stream not in English (e.g. Hindi): captions must be flagged (`language != "en"` or low probability) and the clip marked `needs_review`, never silently rendered with garbled text. → Task 7 test `test_flags_non_english`.
-2. Claude replies with invalid or partial JSON, or with times outside the chunk: reject the chunk's moments, keep the run going, log it. → Task 5 tests `test_rejects_out_of_range_moment`, `test_invalid_json_returns_empty`.
-3. ffmpeg without libass or yt-dlp without node: the run stops at the start with the exact fix command, not mid-render. → Task 1 test `test_reports_missing_ass_filter`.
-4. Live stream re-run: the second run must not re-clip moments already made and must not cut a moment on the boundary. → Task 10 tests `test_next_section_overlaps`, `test_skips_already_clipped`.
-5. No face found (no facecam, or a face in the gameplay): fall back to the `fit` layout instead of cropping a random region. → Task 8 test `test_no_face_falls_back_to_fit`.
+1. A path that escapes the archive root (`..`, a stream title like `../foto video NON TOCCARE`, a symlink) must be refused before any write or delete; the user's photo folder is never touched. → Task 2 tests `test_safe_path_rejects_parent_escape`, `test_safe_name_neutralises_traversal`, `test_clean_work_refuses_outside_work_root`.
+2. Stream not in English (e.g. Hindi): captions must be flagged (`language != "en"` or low probability) and the clip marked `needs_review`, never silently rendered with garbled text. → Task 8 test `test_flags_non_english`.
+3. Claude replies with invalid or partial JSON, or with times outside the chunk: reject the chunk's moments, keep the run going, log it. → Task 6 tests `test_rejects_out_of_range_moment`, `test_invalid_json_returns_empty`.
+4. ffmpeg without libass or yt-dlp without node: the run stops at the start with the exact fix command, not mid-render. → Task 1 test `test_reports_missing_ass_filter`.
+5. Live stream re-run: the second run must not re-clip moments already made and must not cut a moment on the boundary. → Task 11 tests `test_next_section_overlaps`, `test_skips_already_clipped`.
+6. Stick unplugged, full, or a failure mid-run: stop before work starts (no archive files on the Mac), and keep the Mac work folder when archiving fails so a re-run resumes. → Task 2 test `test_preflight_missing_archive_does_not_create_it`; Task 11 test `test_work_kept_when_archive_fails`.
+7. No face found (no facecam, or a face in the gameplay): fall back to the `fit` layout instead of cropping a random region. → Task 9 test `test_no_face_falls_back_to_fit`.
 
 ---
 
@@ -45,8 +54,8 @@
 - Test: `skills/gta6-clipping/tests/test_doctor.py`, `tests/test_config.py`
 
 **Interfaces:**
-- Produces: `config.Paths` (frozen dataclass: `home, work, out, models, venv`), `config.load(overrides: dict | None = None) -> Settings` (frozen dataclass with every constant from Global Constraints), `config.ffmpeg_bin() -> str`.
-- Produces: `doctor.Check(name: str, ok: bool, fix: str)`, `doctor.check_ffmpeg(filters_output: str) -> Check`, `doctor.check_disk(free_bytes: int, need_bytes: int = 2_000_000_000) -> Check`, `doctor.run_all() -> list[Check]`; CLI `python -m clipping.doctor` exits 1 when any check fails and prints each `fix`.
+- Produces: `config.Paths` (frozen dataclass: `home, work, archive, out, state, hf_home, models, venv`; `archive` from env `CLIP_ARCHIVE` or the default, `out = archive/"gta6-clips"`, `state = out/"state"`, `hf_home = archive/"models"`), `config.paths(env: Mapping[str, str] | None = None) -> Paths`, `config.load(overrides: dict | None = None) -> Settings` (frozen dataclass with every constant from Global Constraints), `config.ffmpeg_bin() -> str`.
+- Produces: `doctor.Check(name: str, ok: bool, fix: str)`, `doctor.check_ffmpeg(filters_output: str) -> Check`, `doctor.check_disk(free_bytes: int, need_bytes: int = 5_000_000_000) -> Check`, `doctor.run_all() -> list[Check]` (tool checks here + `storage.preflight` from Task 2, added in that task); CLI `python -m clipping.doctor` exits 1 when any check fails and prints each `fix`.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -64,14 +73,98 @@ def test_low_disk_fails():
 def test_load_overrides_do_not_mutate_defaults():
     a = load({"clips_per_stream": 5}); b = load()
     assert a.clips_per_stream == 5 and b.clips_per_stream == 3
+
+def test_paths_default_archive_is_cartella_di_claude():
+    p = paths({})
+    assert p.archive == Path("/Volumes/KINGSTOM/Cartella di Claude")
+    assert p.out == p.archive / "gta6-clips" and p.hf_home == p.archive / "models"
+    assert not str(p.work).startswith("/Volumes")
+
+def test_paths_env_override(tmp_path):
+    assert paths({"CLIP_ARCHIVE": str(tmp_path)}).archive == tmp_path
 ```
 
 - [ ] **Step 2: Run** `cd skills/gta6-clipping && pytest tests/test_doctor.py tests/test_config.py -v` → FAIL (module not found).
-- [ ] **Step 3: Implement** `config.py` and `doctor.py`. `config.ffmpeg_bin()` returns `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg` if it exists, else `shutil.which("ffmpeg")`. `run_all` checks: ffmpeg + `ass` filter, ffprobe, node, yt-dlp importable, faster-whisper importable, `claude` on PATH, YuNet model file present, disk ≥2 GB. `setup.sh`: creates `~/.gta6-clipping/venv`, installs `requirements.txt` (yt-dlp, faster-whisper, opencv-python-headless, numpy, jsonschema, pytest, pytest-cov), downloads `face_detection_yunet_2023mar.onnx` from the opencv_zoo GitHub repo into `~/.gta6-clipping/models/`, runs doctor, prints `All set` on success. `pytest.ini` sets `pythonpath = scripts` and `--cov=clipping`.
+- [ ] **Step 3: Implement** `config.py` and `doctor.py`. `config.ffmpeg_bin()` returns `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg` if it exists, else `shutil.which("ffmpeg")`. `run_all` checks: ffmpeg + `ass` filter, ffprobe, node, yt-dlp importable, faster-whisper importable, `claude` on PATH, YuNet model file present, Mac disk ≥5 GB. `setup.sh`: creates `~/.gta6-clipping/venv` (on the Mac, never on the stick), installs `requirements.txt` (yt-dlp, faster-whisper, opencv-python-headless, numpy, jsonschema, pytest, pytest-cov), downloads `face_detection_yunet_2023mar.onnx` from the opencv_zoo GitHub repo into `~/.gta6-clipping/models/`, runs doctor, prints `All set` on success. `pytest.ini` sets `pythonpath = scripts` and `--cov=clipping`.
 - [ ] **Step 4: Run** tests → PASS. Run `bash skills/gta6-clipping/scripts/setup.sh` → ends with `All set`.
 - [ ] **Step 5: Commit** `feat: skill scaffold, setup and doctor`
 
-### Task 2: Data model, schemas and event keys
+### Task 2: Storage on the USB stick (path guard, pre-flight, archive copy, work cleanup)
+
+**Files:**
+- Create: `clipping/storage.py`
+- Modify: `clipping/doctor.py` (`run_all` appends `storage.preflight(...)` checks), `scripts/setup.sh` (exports `HF_HOME=<archive>/models` and creates that folder only when the archive root exists)
+- Test: `tests/test_storage.py`
+
+**Interfaces:**
+- Consumes: `config.Paths`, `doctor.Check`.
+- Produces: `storage.FAT32_MAX_BYTES = 4 * 1024**3 - 1`, `storage.UnsafePathError(Exception)`, `storage.safe_path(root: Path, p: Path) -> Path` (resolves both, including symlinks; returns the resolved path when it is `root` or inside it, else raises `UnsafePathError`), `storage.safe_name(s: str, max_len: int = 100) -> str` (drops FAT32-illegal chars and control chars, turns `/` and `\` into nothing, collapses spaces, strips leading/trailing dots and spaces; returns `"untitled"` when empty).
+- Produces: `storage.preflight(p: Paths, mac_free: int, stick_free: int | None) -> list[Check]` (`stick_free=None` means the archive root is missing; never creates directories; checks Mac ≥ 5 GB, stick ≥ 2 GB), `storage.usage_warning(total: int, free: int, threshold: float = 0.8) -> str | None`, `storage.free_bytes(path: Path) -> int | None` (None when the path does not exist).
+- Produces: `storage.archive_file(src: Path, dest: Path, root: Path, max_bytes: int = FAT32_MAX_BYTES) -> Path` (refuses `src` larger than `max_bytes` with `ValueError` naming the size; `safe_path(root, dest)`; makes parent dirs inside root; `shutil.copyfile`; verifies dest size == src size else deletes the partial dest and raises `IOError`; never deletes `src`), `storage.clean_work(work_dir: Path, work_root: Path) -> None` (`safe_path(work_root, work_dir)` and refuses `work_dir == work_root`; then `shutil.rmtree`).
+
+- [ ] **Step 1: Failing tests**
+
+```python
+def test_safe_path_rejects_parent_escape(tmp_path):
+    root = tmp_path / "Cartella di Claude"; root.mkdir()
+    (tmp_path / "foto video NON TOCCARE").mkdir()
+    with pytest.raises(UnsafePathError):
+        safe_path(root, root / ".." / "foto video NON TOCCARE" / "x.mp4")
+
+def test_safe_path_rejects_symlink_escape(tmp_path):
+    root = tmp_path / "a"; root.mkdir(); (tmp_path / "b").mkdir()
+    (root / "link").symlink_to(tmp_path / "b")
+    with pytest.raises(UnsafePathError):
+        safe_path(root, root / "link" / "x")
+
+def test_safe_name_neutralises_traversal():
+    assert "/" not in safe_name("../foto video NON TOCCARE") and not safe_name("..").startswith(".")
+
+def test_safe_name_strips_fat32_chars():
+    assert safe_name('Kai: GTA? "6" <live>|*') == "Kai GTA 6 live"
+
+def test_archive_file_refuses_over_limit(tmp_path):
+    src = tmp_path / "big.mp4"; src.write_bytes(b"x" * 11)
+    with pytest.raises(ValueError):
+        archive_file(src, tmp_path / "arch" / "big.mp4", tmp_path / "arch", max_bytes=10)
+    assert not (tmp_path / "arch" / "big.mp4").exists()
+
+def test_archive_file_copies_and_keeps_source(tmp_path):
+    src = tmp_path / "c.mp4"; src.write_bytes(b"abc"); root = tmp_path / "arch"; root.mkdir()
+    out = archive_file(src, root / "2026-11-19" / "c.mp4", root)
+    assert out.read_bytes() == b"abc" and src.exists()
+
+def test_preflight_missing_archive_does_not_create_it(tmp_path):
+    p = paths({"CLIP_ARCHIVE": str(tmp_path / "KINGSTOM" / "Cartella di Claude")})
+    checks = preflight(p, mac_free=50_000_000_000, stick_free=None)
+    assert any(not c.ok and "chiavetta" in c.fix.lower() for c in checks)
+    assert not (tmp_path / "KINGSTOM").exists()
+
+def test_preflight_low_space(tmp_path):
+    p = paths({"CLIP_ARCHIVE": str(tmp_path)})
+    assert not all(c.ok for c in preflight(p, mac_free=4_000_000_000, stick_free=10_000_000_000))
+    assert not all(c.ok for c in preflight(p, mac_free=50_000_000_000, stick_free=1_000_000_000))
+
+def test_usage_warning_over_80_percent():
+    assert usage_warning(total=100, free=15) and usage_warning(total=100, free=30) is None
+
+def test_clean_work_refuses_outside_work_root(tmp_path):
+    work_root = tmp_path / "work"; (work_root / "s1").mkdir(parents=True); other = tmp_path / "photos"; other.mkdir()
+    with pytest.raises(UnsafePathError):
+        clean_work(other, work_root)
+    with pytest.raises(UnsafePathError):
+        clean_work(work_root, work_root)
+    clean_work(work_root / "s1", work_root)
+    assert other.exists() and not (work_root / "s1").exists()
+```
+
+- [ ] **Step 2: Run** `pytest tests/test_storage.py -v` → FAIL (module not found).
+- [ ] **Step 3: Implement** `storage.py` with the interfaces above. User-facing `fix` messages in Italian, e.g. `"Chiavetta non trovata: collega KINGSTOM e riprova"`, `"Spazio sul Mac sotto 5 GB: libera spazio"`, `"Chiavetta quasi piena (sotto 2 GB): fai pulizia in Cartella di Claude"`. Wire `preflight` into `doctor.run_all` using `shutil.disk_usage(Path.home())` and `free_bytes(p.archive)`.
+- [ ] **Step 4: Run** `pytest tests/test_storage.py tests/test_doctor.py -v` → PASS. Run `python -m clipping.doctor` with the stick attached → storage checks OK.
+- [ ] **Step 5: Verify Whisper cache on FAT32:** `HF_HOME="/Volumes/KINGSTOM/Cartella di Claude/models" ~/.gta6-clipping/venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', compute_type='int8')"` → loads without error and files appear under `Cartella di Claude/models/`. If it fails because of symlinks, stop and report (do not move the cache silently).
+- [ ] **Step 6: Commit** `feat: USB archive storage with path guard and pre-flight`
+
+### Task 3: Data model, schemas and event keys
 
 **Files:**
 - Create: `clipping/models.py`, `clipping/schemas.py`, `skills/gta6-clipping/config/events.json`
@@ -87,7 +180,7 @@ def test_load_overrides_do_not_mutate_defaults():
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat: data model, schemas, event keys`
 
-### Task 3: Stream finder
+### Task 4: Stream finder
 
 **Files:**
 - Create: `clipping/find.py`, `clipping/ytdlp.py`
@@ -100,11 +193,11 @@ def test_load_overrides_do_not_mutate_defaults():
 
 - [ ] **Step 1: Failing tests** — `test_parse_watchlist_skips_comments_and_bad_lines`, `test_is_gta_recent_requires_gta_in_title`, `test_is_gta_recent_rejects_old`, `test_rank_one_per_streamer`.
 - [ ] **Step 2: Run** → FAIL.
-- [ ] **Step 3: Implement.** Network calls only in `find_streams`/`ytdlp.info` (not unit-tested; covered by the Task 11 run).
+- [ ] **Step 3: Implement.** Network calls only in `find_streams`/`ytdlp.info` (not unit-tested; covered by the Task 12 run).
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat: stream finder and watchlist`
 
-### Task 4: Listen (audio, loudness, transcript, chat)
+### Task 5: Listen (audio, loudness, transcript, chat)
 
 **Files:**
 - Create: `clipping/listen/__init__.py`, `listen/audio.py`, `listen/loudness.py`, `listen/transcript.py`, `listen/chat.py`
@@ -113,7 +206,7 @@ def test_load_overrides_do_not_mutate_defaults():
 **Interfaces:**
 - Produces: `audio.download(stream: Stream, section: tuple[float, float] | None, dest: Path) -> Path` (bestaudio, `--download-sections` when section given).
 - Produces: `loudness.parse_astats(text: str) -> list[tuple[float, float]]`, `loudness.per_second(samples) -> list[float]`, `loudness.spikes(per_sec: list[float], z: float = 2.0) -> list[tuple[int, float]]` (second, dB above median), `loudness.measure(audio: Path) -> list[float]` (ffmpeg `astats=metadata=1:reset=1,ametadata=print`).
-- Produces: `Segment(start: float, end: float, text: str)`, `Word(start, end, text, prob)`; `transcript.parse_vtt(text: str) -> list[Segment]` (dedupes repeated auto-caption lines), `transcript.whisper(audio: Path, model: str, words: bool) -> tuple[list[Segment], list[Word], str, float]` (segments, words, language, language_probability; uses `mlx_whisper` when importable, else faster-whisper `int8`), `transcript.get(stream, audio) -> list[Segment]` (platform English captions first, Whisper `tiny` otherwise).
+- Produces: `Segment(start: float, end: float, text: str)`, `Word(start, end, text, prob)`; `transcript.parse_vtt(text: str) -> list[Segment]` (dedupes repeated auto-caption lines), `transcript.whisper(audio: Path, model: str, words: bool) -> tuple[list[Segment], list[Word], str, float]` (segments, words, language, language_probability; uses `mlx_whisper` when importable, else faster-whisper `int8`; model cache is `HF_HOME`, i.e. `Paths.hf_home` on the stick, set by the `gta6clip` launcher), `transcript.get(stream, audio) -> list[Segment]` (platform English captions first, Whisper `tiny` otherwise).
 - Produces: `chat.parse_live_chat(lines: Iterable[str]) -> list[float]` (message offsets in seconds), `chat.rate(offsets, bucket: int = 5) -> dict[int, int]`, `chat.bursts(rate, factor: float = 3.0) -> list[tuple[int, float]]`.
 
 - [ ] **Step 1: Failing tests** — `test_parse_astats_skips_inf`, `test_spikes_finds_yell` (flat −30 dB with one −8 dB second → that second returned), `test_parse_vtt_dedupes_rolling_lines`, `test_parse_live_chat_offsets` (fixture: two `replayChatItemAction` lines with `videoOffsetTimeMsec` 5000/12000 → `[5.0, 12.0]`), `test_bursts_relative_to_median`.
@@ -122,7 +215,7 @@ def test_load_overrides_do_not_mutate_defaults():
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat: listen stage (audio, loudness, transcript, chat)`
 
-### Task 5: Pick moments with Claude
+### Task 6: Pick moments with Claude
 
 **Files:**
 - Create: `clipping/pick.py`, `clipping/claude.py`, `skills/gta6-clipping/prompts/pick.md`
@@ -140,7 +233,7 @@ def test_load_overrides_do_not_mutate_defaults():
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat: Claude moment picking with schema validation`
 
-### Task 6: Fetch clip video and visual check
+### Task 7: Fetch clip video and visual check
 
 **Files:**
 - Create: `clipping/fetch.py`, `clipping/look.py`, `skills/gta6-clipping/prompts/look.md`
@@ -156,7 +249,7 @@ def test_load_overrides_do_not_mutate_defaults():
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat: clip fetch and visual check`
 
-### Task 7: Clip captions (word-by-word EN, language check)
+### Task 8: Clip captions (word-by-word EN, language check)
 
 **Files:**
 - Create: `clipping/captions.py`
@@ -172,7 +265,7 @@ def test_load_overrides_do_not_mutate_defaults():
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat: word-by-word captions with language check`
 
-### Task 8: Layout (facecam detection and crop plan)
+### Task 9: Layout (facecam detection and crop plan)
 
 **Files:**
 - Create: `clipping/layout.py`
@@ -187,14 +280,14 @@ def test_load_overrides_do_not_mutate_defaults():
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat: facecam detection and layout plan`
 
-### Task 9: Render
+### Task 10: Render
 
 **Files:**
 - Create: `clipping/render.py`
 - Test: `tests/test_render.py`
 
 **Interfaces:**
-- Consumes: `LayoutPlan`, ASS text from Task 7, `Moment`, `config.ffmpeg_bin()`.
+- Consumes: `LayoutPlan`, ASS text from Task 8, `Moment`, `config.ffmpeg_bin()`.
 - Produces: `render.filter_graph(plan: LayoutPlan, ass_path: Path, hook: str, credit: str) -> str` (crop/scale/vstack or blur-fit, `ass=` captions, hook bar on the cam/gameplay seam via `drawbox`+`drawtext` with text from a `textfile=` to avoid escaping bugs, credit tag `@streamer` bottom-left at 60% opacity, `brightness` lift `eq=brightness=0.06` when mean luma < 60), `render.command(src: Path, out: Path, graph: str, fast: bool) -> list[str]`, `render.render(...) -> Path`.
 
 - [ ] **Step 1: Failing tests** — `test_graph_uses_textfile_not_inline_text` (a hook with `:` and `'` does not appear inline), `test_graph_has_loudnorm_minus_14`, `test_fast_uses_videotoolbox`, `test_render_synthetic_clip` (integration: ffmpeg `testsrc=size=1920x1080:duration=3` + `sine` → output probed as 1080x1920, ~3 s, has audio; skipped when ffmpeg lacks `ass`).
@@ -203,7 +296,7 @@ def test_load_overrides_do_not_mutate_defaults():
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat: render 9:16 clip with hook, captions, credit`
 
-### Task 10: Run state, POST.md and the CLI
+### Task 11: Run state, POST.md and the CLI
 
 **Files:**
 - Create: `clipping/state.py`, `clipping/post.py`, `clipping/run.py`, `skills/gta6-clipping/scripts/gta6clip`
@@ -211,26 +304,48 @@ def test_load_overrides_do_not_mutate_defaults():
 
 **Interfaces:**
 - Consumes: everything above.
-- Produces: `state.load(work: Path) -> RunState` (`processed_until: float`, `clipped: tuple[tuple[float, float], ...]`), `state.next_section(s: RunState, now_duration: float, overlap: float = 90) -> tuple[float, float] | None`, `state.already_clipped(s, m: Moment, tol: float = 20) -> bool`, `state.advance(s, until, moments) -> RunState` (new object).
-- Produces: `post.render_md(stream, items: list[tuple[Moment, Path]]) -> str` (per clip: file, hook, caption, hashtags, `credit: @streamer`, link with timestamp, flags shown as `⚠ needs review: ...`), `post.write(out_dir, ...)`, also `clips.json` and `report.json` (seconds per stage).
-- Produces: CLI `gta6clip [URL ...] [--find] [--list] [--streams N] [--clips N] [--section A-B] [--cookies BROWSER] [--layout auto|stream|face|fit] [--model M] [--fast] [--redo] [--keep-audio] [--parallel N]`; runs doctor first; processes streams `--parallel` at a time (default 2); resumes from `~/gta6-clips/work/`.
+- Consumes: `storage.safe_path`, `storage.safe_name`, `storage.archive_file`, `storage.clean_work`, `storage.preflight`, `storage.usage_warning`, `config.Paths`.
+- Produces: `state.state_file(p: Paths, stream_id: str) -> Path` (`p.state / f"{safe_name(stream_id)}.json"`, on the stick), `state.save(path: Path, s: RunState, root: Path) -> None` (writes through `safe_path`).
+- Produces: `state.load(path: Path) -> RunState` (empty state when the file does not exist) (`processed_until: float`, `clipped: tuple[tuple[float, float], ...]`), `state.next_section(s: RunState, now_duration: float, overlap: float = 90) -> tuple[float, float] | None`, `state.already_clipped(s, m: Moment, tol: float = 20) -> bool`, `state.advance(s, until, moments) -> RunState` (new object).
+- Produces: `post.render_md(stream, items: list[tuple[Moment, Path]]) -> str` (per clip: file, hook, caption, hashtags, `credit: @streamer`, link with timestamp, flags shown as `⚠ needs review: ...`), `post.write(work_out: Path, ...)` (writes POST.md, `clips.json`, `report.json` (seconds per stage) into the Mac work folder first).
+- Produces: `run.out_dir(p: Paths, stream: Stream, day: str) -> Path` (`p.out / day / f"{safe_name(stream.streamer)}__{safe_name(stream.title)}"`), `run.archive_stream(work_dir: Path, files: list[Path], dest_dir: Path, p: Paths, keep_work: bool, archive=storage.archive_file, clean=storage.clean_work) -> list[Path]` (archives every file; only when all succeed and not `keep_work` calls `clean(work_dir, p.work)`; on any error re-raises and leaves `work_dir` intact).
+- Produces: CLI `gta6clip [URL ...] [--find] [--list] [--streams N] [--clips N] [--section A-B] [--cookies BROWSER] [--layout auto|stream|face|fit] [--model M] [--fast] [--redo] [--keep-work] [--parallel N]`; the launcher script exports `HF_HOME` from `Paths.hf_home`; runs doctor (incl. storage pre-flight) first and stops on failure; processes streams `--parallel` at a time (default 2); resumes from `~/gta6-clips/work/`; prints `usage_warning` for the stick at the end.
 
-- [ ] **Step 1: Failing tests** — `test_next_section_overlaps` (processed_until 3600, duration 7200 → (3510, 7200)), `test_next_section_none_when_nothing_new`, `test_skips_already_clipped`, `test_advance_returns_new_state`, `test_post_md_shows_flags_and_credit`, `test_cli_parses_section`.
+- [ ] **Step 1: Failing tests** — `test_next_section_overlaps` (processed_until 3600, duration 7200 → (3510, 7200)), `test_next_section_none_when_nothing_new`, `test_skips_already_clipped`, `test_advance_returns_new_state`, `test_post_md_shows_flags_and_credit`, `test_cli_parses_section`, plus:
+
+```python
+def test_state_file_lives_in_archive(tmp_path):
+    p = paths({"CLIP_ARCHIVE": str(tmp_path)})
+    assert state_file(p, "yt:abc/../x").parent == p.state
+
+def test_out_dir_name_is_fat32_safe(tmp_path):
+    p = paths({"CLIP_ARCHIVE": str(tmp_path)})
+    s = Stream(id="1", url="u", platform="youtube", streamer="Kai", title="GTA 6: day 1?", duration=1.0, is_live=False)
+    assert out_dir(p, s, "2026-11-19").name == "Kai__GTA 6 day 1"
+
+```
+
+  In the three tests below, `p = dataclasses.replace(paths({"CLIP_ARCHIVE": str(tmp_path / "arch")}), work=tmp_path / "work")`, `work_dir = p.work / "s1"` holding one file `c.mp4`, `dest_dir = p.out / "2026-11-19" / "Kai__x"`:
+  - `test_work_cleaned_after_archive` — `archive_stream(..., keep_work=False)` → `dest_dir / "c.mp4"` exists, `work_dir` does not.
+  - `test_work_kept_when_archive_fails` — `archive=` fake raising `IOError` → `archive_stream` raises `IOError`; `work_dir / "c.mp4"` still exists.
+  - `test_keep_work_flag_skips_cleanup` — `keep_work=True` → file archived and `work_dir` still exists.
+
 - [ ] **Step 2: Run** → FAIL.
-- [ ] **Step 3: Implement.** `run.py` wires stages; each stage skips when its JSON output exists unless `--redo`.
+- [ ] **Step 3: Implement.** `run.py` wires stages; each stage skips when its JSON output exists unless `--redo`. All rendering happens in the Mac work folder; only `archive_stream` writes to the stick; live state is saved with `state.save` after the stream's clips are archived.
 - [ ] **Step 4: Run** `pytest --cov=clipping --cov-fail-under=80` → PASS.
 - [ ] **Step 5: Commit** `feat: resumable runs, POST.md, CLI`
 
-### Task 11: SKILL.md, docs, licence and real-stream check
+### Task 12: SKILL.md, docs, licence and real-stream check
 
 **Files:**
 - Create: `skills/gta6-clipping/SKILL.md`, `LICENSE` (MIT, copyright holder: the repo owner's GitHub handle `logiop`)
 - Modify: `README.md` (point to the new skill, install steps: copy folder to `~/.claude/skills/`, run `setup.sh`), `.gitignore` (nothing new expected)
 
-- [ ] **Step 1:** Write `SKILL.md`: when to use, commands table (from Task 10 CLI), launch-day playbook (live re-runs every 2-3 h), review checklist before posting (face in cam crop, captions readable, right streamer credited, no `⚠` flags unresolved), the rule that Claude never posts.
+- [ ] **Step 1:** Write `SKILL.md`: when to use, commands table (from Task 11 CLI), launch-day playbook (live re-runs every 2-3 h), review checklist before posting (face in cam crop, captions readable, right streamer credited, no `⚠` flags unresolved), the rule that Claude never posts.
 - [ ] **Step 2: Run real check** on the two videos used before:
   `bash skills/gta6-clipping/scripts/gta6clip https://youtu.be/XOgzG-IFsJo https://youtu.be/3PiR0G3rVw8 --clips 3 --fast`
-  Expected: two output folders with clips at 1080x1920, POST.md, no crash; open a frame sheet of each clip and confirm layout, captions and credit.
+  Before: record `ls -la /Volumes/KINGSTOM` (top level only; never list inside `foto video NON TOCCARE`).
+  Expected: two output folders under `/Volumes/KINGSTOM/Cartella di Claude/gta6-clips/<today>/` with clips at 1080x1920 and POST.md; `~/gta6-clips/work/` has no folder for these streams; top-level listing of `/Volumes/KINGSTOM` unchanged except `Cartella di Claude` mtime; no crash. Open a frame sheet of each clip and confirm layout, captions and credit.
 - [ ] **Step 3:** Run `bash skills/gta6-clipping/scripts/gta6clip --find --list` → prints a ranked list or a clear "nothing found" message.
 - [ ] **Step 4: Commit** `docs: SKILL.md, README install, MIT licence`
 

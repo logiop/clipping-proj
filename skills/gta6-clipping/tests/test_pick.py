@@ -142,3 +142,19 @@ def test_crashing_chunk_is_logged_and_skipped(capsys):
     got = pick.pick(STREAM, segs, [], [], n=3, model="sonnet", runner=runner)
     assert [m.score for m in got] == [66]
     assert "crashed (RuntimeError)" in capsys.readouterr().err
+
+
+def test_annotate_marks_only_the_loudest_spikes_per_chunk():
+    segs = [Segment(float(i * 2), float(i * 2 + 1), f"line {i}") for i in range(30)]
+    spikes = [(i * 2, 1.0 + (i * 7) % 30) for i in range(30)]  # 30 spikes, dB 1..30 in shuffled order
+    lines = pick.annotate(segs, spikes=spikes, bursts=[]).splitlines()
+    marked = [i for i, line in enumerate(lines) if "[LOUD" in line]
+    assert len(marked) == pick.MAX_LOUD_MARKS_PER_CHUNK == 12
+    loudest = sorted(range(30), key=lambda i: -spikes[i][1])[:12]
+    assert sorted(marked) == sorted(loudest)
+
+
+def test_annotate_loud_ties_prefer_earlier_spikes():
+    segs = [Segment(float(i), float(i) + 0.5, f"l{i}") for i in range(20)]
+    lines = pick.annotate(segs, spikes=[(i, 5.0) for i in range(20)], bursts=[]).splitlines()
+    assert [i for i, line in enumerate(lines) if "[LOUD" in line] == list(range(12))

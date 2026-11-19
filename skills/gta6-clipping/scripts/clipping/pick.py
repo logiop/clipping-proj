@@ -16,6 +16,7 @@ CHAT_BUCKET_S = 5
 _DATA_TAG = re.compile(r"<(/?stream_data)", re.IGNORECASE)
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 MIN_GAP_S = 60
+MAX_LOUD_MARKS_PER_CHUNK = 12  # spikes are detected with a low z; only the loudest are worth a mark
 
 Chunk = Tuple[float, float, List[Segment]]
 
@@ -40,8 +41,22 @@ def _timestamp(seconds: float) -> str:
     return f"{total // 60:02d}:{total % 60:02d}"
 
 
+def _loudest(chunk_segments: Sequence[Segment], spikes, limit: int = MAX_LOUD_MARKS_PER_CHUNK):
+    """The `limit` spikes inside the chunk with the most dB above median (earlier first on ties)."""
+    if not chunk_segments:
+        return []
+    start = min(s.start for s in chunk_segments)
+    end = max(s.end for s in chunk_segments)
+    inside = [(sec, db) for sec, db in spikes if start <= sec <= end]
+    return sorted(inside, key=lambda sp: (-sp[1], sp[0]))[:limit]
+
+
 def annotate(chunk_segments: Sequence[Segment], spikes, bursts) -> str:
-    """One line per segment: `[mm:ss] text [LOUD +NdB] [CHAT xN]`."""
+    """One line per segment: `[mm:ss] text [LOUD +NdB] [CHAT xN]`.
+
+    Only the MAX_LOUD_MARKS_PER_CHUNK loudest spikes of the chunk are marked.
+    """
+    spikes = _loudest(chunk_segments, spikes)
     lines = []
     for seg in chunk_segments:
         line = f"[{_timestamp(seg.start)}] {seg.text}"

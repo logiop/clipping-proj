@@ -13,6 +13,17 @@ Pipeline: audio only -> Whisper transcript + loudness -> Claude picks moments ->
 - Only clip streamers who allow it, always credit them, never use leaked or unlicensed footage.
 - The skill writes only inside the archive root and never deletes anything on the stick.
 
+## How Claude runs a request
+
+The engine does its own Claude calls and reports their tokens. Your job is to start it and report back, spending as little as possible.
+
+1. Build the command from the request: `bash ~/.claude/skills/gta6-clipping/scripts/gta6clip <URL> --clips N --fast`. Default N = 3; add `--section A-B` if the user names a part.
+2. Run it with the Bash tool's `run_in_background: true`, and send the output to a log file.
+3. Tell the user once how long it takes: about 40 min for a full 12 h VOD, about 11 min for a 10-minute section. Then stop.
+4. Do NOT poll, tail the log, sleep or check progress while it runs. Wait for the completion notice.
+5. When it ends, read only the last ~15 lines of the log. Reply with: where the clips are (the `archived ... .mp4` lines), the `tokens:` line, and how long it took. If the exit code is not 0, quote the error line.
+6. Do NOT open, play or extract frames from the clips, and do not read the POST or report files unless the user asks. The human reviews the clips.
+
 ## Commands
 
 `gta6clip` below means the launcher `~/.claude/skills/gta6-clipping/scripts/gta6clip`, run as `bash <launcher> [URL ...] [flags]`.
@@ -43,7 +54,7 @@ Pipeline: audio only -> Whisper transcript + loudness -> Claude picks moments ->
 
 ## Launch-day playbook
 
-1. Plug in the stick (before setup.sh on a fresh install), run `gta6clip --find --list` and pick the biggest streams.
+1. Fresh install: plug in the stick, run `scripts/setup.sh`, then `scripts/install.sh` (links the skill into `~/.claude/skills`; re-run it if the repo moves). Then run `gta6clip --find --list` and pick the biggest streams.
 2. Live mode is NOT yet verified end to end on real platforms (YouTube may need `--live-from-start`; Twitch live HLS cannot seek back). For now wait for the stream to end and run on the VOD: `gta6clip <VOD_URL> --clips 3 --fast` (use `--section` for a part of it).
 3. If you still run on a live URL, treat it as experimental: re-run every 2-3 h; saved state resumes where the last run stopped and re-reads a 90 s overlap. Use `--redo` only if state is corrupt.
 4. After each run read `report_<HHMMSS>.json` and the `POST_<HHMMSS>.md`, then review (below).

@@ -50,6 +50,34 @@ The user wants proof the new version is "right": same capability, lower cost.
 - Token baseline for "before": the old code did not log usage, so before = measured new content tokens + (old per-call context − new per-call context) × number of calls, with both per-call figures measured live on the same day (this doc's table). The user's `/usage` reading on the new run gives the real % of the limit.
 - Pass criteria: ≥ 6 of 10 picks match the earlier run or are judged equal/better by the user on the side-by-side table; total tokens per 12 h run reduced by ≥ 70%; `/usage` delta ≤ 15%.
 
+## Measured results (2026-11-20, Kai Cenat VOD, ~12 h)
+
+| | Before (estimated) | After (measured) |
+|---|---|---|
+| Fixed context per call | ~14,800 tokens | ~690 tokens |
+| 10-min section 7200-7800 | — | 20,145 tokens, 3 calls, ≈ $0.08 |
+| Full 12 h run (`--pick-only --clips 10`) | ≈ 1.42 M tokens | 546,291 tokens (pick 475,961, look 70,330), 62 calls, ≈ $2.09 |
+| Stage times (audio cached) | — | listen 751 s, pick 128 s, look 846 s |
+
+Baseline = 546,291 + (14,800 − 690) × 62 ≈ 1.42 M → **−62%**.
+
+Pick comparison with the earlier run (clips 01-12, `compare_picks.py`):
+- 5/10 match by the ≥ 50% overlap rule, plus 1 adjacent shot of the same scene (14401 shark dive vs old 08 at 14320-14380) → **6/10 same scenes**.
+- The 10-min section picked 7340-7396 (score 68) vs old 02 at 7300-7345 (score 72): same scene, a few seconds later.
+- The other 4 picks are new moments from hours 5.4-7.5. The earlier run had no pick after 17,658 s. The 4 were rendered (0 Claude tokens, picks served from cache, 7 min) and archived under `2026-11-20/` for the user to judge.
+
+`/usage` on the full run: session 32% → 49% (**+17 points**), week 77% → 78%. The +17 includes the controlling conversation's own turns, which were long by then; the engine's share alone could not be separated.
+
+### Pass / fail against the criteria
+
+| Criterion | Result | Verdict |
+|---|---|---|
+| ≥ 6/10 picks match or judged equal/better | 6/10 same scenes; 4 new awaiting the user's judgment | **pass** (borderline on strict overlap: 5/10) |
+| Tokens per 12 h run −70% | −62% | **fail** (short by 8 points) |
+| `/usage` delta ≤ 15% | +17 points, conversation included | **not proven**; re-measure from a fresh session once the engine is an installed skill |
+
+Same capabilities kept: same model, prompts, schemas, visual check with Read limited to the frames folder. Next lever if the clean measurement is still above 15%: bigger pick chunks or a hot-window prefilter (pick is 87% of the tokens), each behind a side-by-side test.
+
 ## Left to the builder
 
 Exact system-prompt wording (short, no task details), how usage is threaded back (return tuple vs result object), report field names.

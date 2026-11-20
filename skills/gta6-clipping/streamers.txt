@@ -1,4 +1,4 @@
-# Watchlist for gta6-clipper (copy to ~/gta6-clips/streamers.txt)
+# Watchlist for gta6-clipping (read from this skill folder)
 # platform:name  -> twitch:<login> or youtube:@handle
 # Only clip streamers who allow it. Check their clipping program first.
 twitch:kaicenat
